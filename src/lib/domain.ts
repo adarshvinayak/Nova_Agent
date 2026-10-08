@@ -1,5 +1,5 @@
 export type Actor = { id: string; workspaceId: string; email: string; displayName: string; userCode?: string; role?: 'user'|'admin'; permissions?: Record<string,boolean> };
-export type Intent = 'appointment' | 'note' | 'task' | 'agenda' | 'unsupported' | 'unclear';
+export type Intent = 'appointment' | 'note' | 'task' | 'agenda' | 'cancel' | 'unsupported' | 'unclear';
 export type AgendaScope = 'next' | 'today' | 'my_tasks' | 'today_tasks' | 'today_appointments' | 'appointments';
 export type AgendaSummary = {scope:AgendaScope;label:string;asOf:string;rangeEnd?:string|null;truncated:boolean;items:{id:string;kind:'task'|'appointment';title:string;startsAt:string|null;endsAt?:string|null;userCode:string|null;status:string}[]};
 export type TaskDraft = {title:string;assigneeUserCode:string;dueAt:string|null};
@@ -13,7 +13,7 @@ export const emptyFacts = (): Facts => ({ intent: 'unclear', title: null, date: 
   durationMinutes: null, location: null, locationNotApplicable: false, timeZone: 'Asia/Dubai', ambiguities: [] });
 export type EventSnapshot = { title: string; location: string | null; start: string; end: string; timeZone: string };
 export type AttemptStatus = 'reserved' | 'writing' | 'unknown' | 'succeeded' | 'blocked' | 'failed';
-export type SessionState = 'captured' | 'clarifying' | 'ready' | 'confirming' | 'booked' | 'note_saved' | 'booking_unknown' | 'failed' | 'note_ready' | 'task_ready' | 'task_saved';
+export type SessionState = 'captured' | 'clarifying' | 'ready' | 'confirming' | 'booked' | 'note_saved' | 'booking_unknown' | 'failed' | 'note_ready' | 'task_ready' | 'task_saved' | 'cancelled' | 'completed' | 'action_expired';
 export type SessionView = {
   id: string; state: SessionState; version: number; facts: Facts; createdAt: string; contentExpired: boolean;
   turns: { id: string; speaker: 'user' | 'assistant'; body: string | null }[];

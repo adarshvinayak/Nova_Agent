@@ -1,18 +1,29 @@
+import { actorRateLimit } from '@/lib/rate-limit';
+import { z } from 'zod';
+import { actionQuota,refreshActionQuota,touchAction } from '@/lib/action-quota';
 import { actor } from '@/lib/auth';
 import { config } from '@/lib/config';
 import { actorTransaction } from '@/lib/db';
 import { AppError, ProviderError } from '@/lib/errors';
-import { api, mutationGuard, rateLimit } from '@/lib/http';
+import { api, jsonBody, mutationGuard } from '@/lib/http';
 import { issueSpeechToken } from '@/lib/providers';
 
 export async function POST(request: Request) {
   return api(async () => {
     mutationGuard(request);
     const worker = await actor();
+    const input=z.object({sessionId:z.uuid().optional()}).strict().parse(await jsonBody(request));
+    await refreshActionQuota(worker);
     if (config().mode !== 'live' && process.env.SPEECH_PROVIDER !== 'deepgram') throw new AppError('SPEECH_DEMO_UNAVAILABLE', 'Live transcription needs a configured Deepgram account. Type your capture in this demo.', 503);
-    await rateLimit(`speech-token:${worker.id}`, 5);
-    const speechSessionId = await actorTransaction(worker, async db => {
-      const result = await db.query("INSERT INTO public.va_speech_sessions(workspace_id,worker_id,provider) VALUES($1,$2,'deepgram') RETURNING id", [worker.workspaceId, worker.id]);
+    await actorRateLimit(worker,`speech-token:${worker.id}`, 5);
+    const speechSessionId = await actorTransaction(worker, async (db,member) => {
+      if(member.role!=='admin'&&member.permissions.capture===false)throw new AppError('FORBIDDEN','You do not have access to voice capture.',403);
+      if(input.sessionId){
+        const owned=await db.query('SELECT id FROM public.va_sessions WHERE id=$1 AND worker_id=$2 AND workspace_id=$3',[input.sessionId,worker.id,worker.workspaceId]);
+        if(!owned.rowCount)throw new AppError('NOT_FOUND','Request not found.',404);
+        await touchAction(db,worker,input.sessionId);
+      }else if((await actionQuota(db,worker)).remaining===0)throw new AppError('ACTION_LIMIT_REACHED','Request limit reached. Contact your admin.',429);
+      const result = await db.query("INSERT INTO public.va_speech_sessions(workspace_id,worker_id,provider,action_session_id) VALUES($1,$2,'deepgram',$3) RETURNING id", [worker.workspaceId, worker.id,input.sessionId??null]);
       return result.rows[0].id as string;
     });
     try {

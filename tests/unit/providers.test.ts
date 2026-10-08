@@ -83,6 +83,25 @@ describe('calendar provider boundary', () => {
 });
 
 describe('language providers', () => {
+  it('accepts draft cancellation as a control intent and teaches the saved-event distinction', async () => {
+    const previous = { ...emptyFacts(), intent: 'appointment' as const, title: 'Inspection' };
+    const facts = { ...previous, intent: 'cancel' };
+    fetchMock.mockResolvedValueOnce(reply({ id: 'request', choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(facts) } }] }));
+    await expect(new GroqLanguageProvider().extract('I no longer want this request', previous, '2026-10-08T00:00:00Z')).resolves.toMatchObject({ facts });
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.response_format.json_schema.schema.properties.intent.enum).toContain('cancel');
+    expect(body.messages[0].content).toContain('do not ask another missing-field question');
+    expect(body.messages[0].content).toContain('Requests to cancel a saved event remain unsupported');
+    expect(body.messages[0].content).toContain('single detail that blocks progress');
+  });
+  it('cancels the synthetic draft while retaining literal cancellation text inside notes and tasks', async () => {
+    const provider = new SimulatedLanguageProvider();
+    const previous = { ...emptyFacts(), intent: 'appointment' as const, title: 'Inspection' };
+    expect((await provider.extract('Cancel it', previous, '2026-10-08T00:00:00Z')).facts).toMatchObject({ intent: 'cancel', title: 'Inspection' });
+    expect((await provider.extract('Note: cancel it', previous, '2026-10-08T00:00:00Z')).facts).toMatchObject({ intent: 'note', noteText: 'cancel it' });
+    expect((await provider.extract('Assign a task cancel supplier call to user2', previous, '2026-10-08T00:00:00Z')).facts).toMatchObject({ intent: 'task', title: 'cancel supplier call', assigneeUserCode: 'user2' });
+    expect((await provider.extract('Cancel the booked appointment', previous, '2026-10-08T00:00:00Z')).facts.intent).toBe('unsupported');
+  });
   it('sends closed strict schema and rejects truncated or schema-invalid facts', async () => {
     const provider = new GroqLanguageProvider();
     fetchMock.mockResolvedValueOnce(reply({ id: 'request', choices: [{ finish_reason: 'length', message: { content: '{}' } }] }));

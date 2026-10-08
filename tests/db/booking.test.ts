@@ -1,4 +1,4 @@
-import { beforeAll,afterAll,describe,it,expect,vi } from 'vitest';
+import { beforeAll,beforeEach,afterAll,describe,it,expect,vi } from 'vitest';
 import { readFile,readdir } from 'node:fs/promises';
 import { Pool } from 'pg';
 import { randomUUID } from 'node:crypto';
@@ -10,6 +10,7 @@ import { getCalendarProvider } from '../../src/lib/providers';
 import { ProviderError } from '../../src/lib/errors';
 import { pool } from '../../src/lib/db';
 import { applyRetention } from '../../scripts/retention-core';
+import {resetActionFixtures} from './quota-fixture';
 const testUrl=process.env.TEST_DATABASE_URL!;const admin=new Pool({connectionString:testUrl});
 const workspace=randomUUID();const a:Actor={id:randomUUID(),workspaceId:workspace,email:'a@test.local',displayName:'A'};
 const b:Actor={id:randomUUID(),workspaceId:workspace,email:'b@test.local',displayName:'B'};
@@ -25,6 +26,7 @@ beforeAll(async()=>{
  await admin.query("INSERT INTO private.va_calendar_connections(workspace_id,calendar_id,calendar_label,provider) VALUES($1,'test-calendar','Test','simulated')",[workspace]);
 });
 afterAll(async()=>{await admin.end();await pool().end();});
+beforeEach(async()=>{await resetActionFixtures(admin,[a,b]);});
 async function ready(w=a){
  const c=await capture(w,{text:'Book site inspection',source:'typed',clientCaptureId:randomUUID()});
  await editFacts(w,c.id,{expectedVersion:1,clientActionId:randomUUID(),facts:{intent:'appointment',title:'Site inspection',date:`2030-02-${String(day++).padStart(2,'0')}`,time:'10:00',durationMinutes:30,location:'Warehouse 2',locationNotApplicable:false}});

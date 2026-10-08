@@ -1,4 +1,5 @@
 import 'server-only';
+import { actionQuota,refreshActionQuota,startAction,touchAction,finishAction } from './action-quota';
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { actorTransaction,workerRead } from './db';
@@ -35,24 +36,30 @@ export async function appendTurn(db:PoolClient,actor:Actor,id:string,speaker:'us
 }
 function requireEditable(row:Record<string,unknown>,version:number) {
   if(row.version!==version) throw new AppError('STALE_VERSION','This conversation changed. Reload it before continuing.',409);
-  if(['confirming','booked','booking_unknown','note_saved','task_saved'].includes(String(row.state))) throw new AppError('SESSION_LOCKED','This request is already saved or has a booking in progress.',409);
+  if(['confirming','booked','booking_unknown','note_saved','task_saved','cancelled','completed','action_expired'].includes(String(row.state))) throw new AppError('SESSION_LOCKED','This request is already saved or has a booking in progress.',409);
   if(row.content_redacted_at) throw new AppError('CONTENT_EXPIRED','This conversation has expired. Start a new capture.',410);
 }
 export async function capture(actor:Actor,input:{text:string;source:string;clientCaptureId:string}) {
+  await refreshActionQuota(actor);
   return actorTransaction(actor,async db=>{
+    await actionQuota(db,actor);
     const old=await idempotent(db,actor,'capture',input.clientCaptureId,{text:input.text,source:input.source});
     if(old) return {id:old.resource_id as string,process:false};
     const id=randomUUID();
     await db.query(`INSERT INTO public.va_sessions(id,workspace_id,worker_id,facts) VALUES($1,$2,$3,$4)`,[id,actor.workspaceId,actor.id,JSON.stringify(emptyFacts())]);
+    await startAction(db,actor,id);
     await appendTurn(db,actor,id,'user',input.text,input.clientCaptureId,input.source);
     await finishKey(db,actor,'capture',input.clientCaptureId,id);
     return {id,process:true};
   });
 }
 export async function submitTurn(actor:Actor,id:string,input:{text:string;source?:'typed'|'browser_voice';expectedVersion:number;clientTurnId:string}) {
+  await refreshActionQuota(actor);
   return actorTransaction(actor,async db=>{
+    await actionQuota(db,actor);
     const old=await idempotent(db,actor,'turn',input.clientTurnId,{id,text:input.text,source:input.source??'typed',version:input.expectedVersion});
     if(old) return {id,process:false};
+    await touchAction(db,actor,id);
     const session=await ownedSession(db,actor,id,true);requireEditable(session,input.expectedVersion);
     await db.query("UPDATE public.va_proposals SET status='superseded' WHERE session_id=$1 AND status='ready'",[id]);
     await appendTurn(db,actor,id,'user',input.text,input.clientTurnId,input.source??'typed');
@@ -62,9 +69,12 @@ export async function submitTurn(actor:Actor,id:string,input:{text:string;source
   });
 }
 export async function editFacts(actor:Actor,id:string,input:{facts:Partial<Facts>;expectedVersion:number;clientActionId:string}) {
+  await refreshActionQuota(actor);
   return actorTransaction(actor,async db=>{
+    await actionQuota(db,actor);
     const old=await idempotent(db,actor,'edit',input.clientActionId,{id,facts:input.facts,version:input.expectedVersion});
     if(old) return {id,process:false};
+    await touchAction(db,actor,id);
     const session=await ownedSession(db,actor,id,true);requireEditable(session,input.expectedVersion);
     await db.query("UPDATE public.va_proposals SET status='superseded' WHERE session_id=$1 AND status='ready'",[id]);
     const facts={...emptyFacts(),...session.facts,...input.facts,timeZone:'Asia/Dubai',ambiguities:[]};
@@ -76,9 +86,12 @@ export async function editFacts(actor:Actor,id:string,input:{facts:Partial<Facts
   });
 }
 export async function saveNote(actor:Actor,id:string,input:{expectedVersion:number;clientActionId:string}) {
+  await refreshActionQuota(actor);
   return actorTransaction(actor,async db=>{
+    await actionQuota(db,actor);
     const old=await idempotent(db,actor,'note',input.clientActionId,{id,version:input.expectedVersion});
     if(old) return {id};
+    await touchAction(db,actor,id);
     const session=await ownedSession(db,actor,id,true);requireEditable(session,input.expectedVersion);
     const {rows}=await db.query("SELECT body FROM public.va_turns WHERE session_id=$1 AND speaker='user' ORDER BY turn_no",[id]);
     const body=session.facts.intent==='note'&&(session.facts.noteText||session.facts.title)?(session.facts.noteText||session.facts.title):rows.map(r=>r.body).filter(Boolean).join('\n');
@@ -88,14 +101,18 @@ export async function saveNote(actor:Actor,id:string,input:{expectedVersion:numb
     await db.query("UPDATE public.va_sessions SET state='note_saved',version=version+1,assistant_view=NULL,processing_token=NULL,processing_until=NULL,updated_at=now() WHERE id=$1",[id]);
     await appendTurn(db,actor,id,'assistant','Note saved.');
     await db.query(`INSERT INTO private.va_operation_events(workspace_id,actor_worker_id,subject_id,session_id,event_type,detail) VALUES($1,$2,$3,$3,'note.confirmed',$4)`,[actor.workspaceId,actor.id,id,{userCode:actor.userCode??'worker',alias:actor.displayName,decision:'confirmed',sessionVersion:input.expectedVersion}]);
+    await finishAction(db,actor,id,'confirmed');
     await finishKey(db,actor,'note',input.clientActionId,id);return {id};
   });
 }
 export async function confirmTask(actor:Actor,id:string,input:{expectedVersion:number;clientActionId:string}) {
+  await refreshActionQuota(actor);
  return actorTransaction(actor,async db=>{
-  const old=await idempotent(db,actor,'task',input.clientActionId,{id,version:input.expectedVersion});
+  await actionQuota(db,actor);
+    const old=await idempotent(db,actor,'task',input.clientActionId,{id,version:input.expectedVersion});
   if(old)return {id};
-  const session=await ownedSession(db,actor,id,true);requireEditable(session,input.expectedVersion);
+  await touchAction(db,actor,id);
+    const session=await ownedSession(db,actor,id,true);requireEditable(session,input.expectedVersion);
   const draft=session.assistant_view?.taskDraft;
   if(session.state!=='task_ready'||session.facts.intent!=='task'||!draft)throw new AppError('NOT_READY','Review a complete task before confirming.',409);
   // Recheck assignment and current permissions at the moment of confirmation.
@@ -105,7 +122,8 @@ export async function confirmTask(actor:Actor,id:string,input:{expectedVersion:n
   await appendTurn(db,actor,id,'assistant',`Task assigned to ${resolved.assigneeUserCode}.`);
   await db.query(`INSERT INTO private.va_operation_events(workspace_id,actor_worker_id,subject_id,session_id,event_type,detail,content)
     VALUES($1,$2,$3,$3,'task.confirmed',$4,$5)`,[actor.workspaceId,actor.id,id,{userCode:actor.userCode??'worker',alias:actor.displayName,decision:'confirmed'},{taskDraft:resolved}]);
-  await finishKey(db,actor,'task',input.clientActionId,id);return {id};
+  await finishAction(db,actor,id,'confirmed');
+    await finishKey(db,actor,'task',input.clientActionId,id);return {id};
  });
 }
 export async function sessionView(actor:Actor,id:string):Promise<SessionView> {
@@ -153,7 +171,7 @@ export async function dashboard(actor:Actor,type:string,cursor?:string):Promise<
     AND NOT EXISTS(SELECT 1 FROM public.va_attempts a WHERE a.workspace_id=$1 AND a.event_id=e.event_id AND a.status='succeeded')
   ), ranked AS (
    SELECT *,CASE WHEN (kind='event' AND starts_at >= $5::timestamptz) OR (kind='task' AND status<>'done' AND starts_at IS NOT NULL) THEN 0
-    WHEN kind='task' AND status<>'done' THEN 1 WHEN kind='request' AND status NOT IN ('booked','note_saved','task_saved') THEN 2 ELSE 3 END AS sort_rank FROM items
+    WHEN kind='task' AND status<>'done' THEN 1 WHEN kind='request' AND status NOT IN ('booked','note_saved','task_saved','completed','cancelled','action_expired') THEN 2 ELSE 3 END AS sort_rank FROM items
   ), sorted AS (
    SELECT *,CASE WHEN sort_rank=0 THEN extract(epoch FROM starts_at) WHEN sort_rank=1 THEN extract(epoch FROM created_at) ELSE -extract(epoch FROM created_at) END AS sort_at FROM ranked
   ) SELECT * FROM sorted WHERE ($6='all' OR kind=$6) AND ($7::integer IS NULL OR (sort_rank,sort_at,id)>($7::integer,$8::numeric,$9::uuid))
@@ -161,5 +179,23 @@ export async function dashboard(actor:Actor,type:string,cursor?:string):Promise<
   const visible=rows.slice(0,20),last=visible.at(-1);
   return {items:visible.map(r=>({id:r.id,sessionId:r.session_id,kind:r.kind,title:r.content_redacted_at?'Content expired':r.title??'Untitled',body:r.body,status:r.status,startsAt:r.starts_at?.toISOString()??null,createdAt:r.created_at.toISOString(),contentExpired:!!r.content_redacted_at})),
    nextCursor:rows.length>20&&last?Buffer.from(JSON.stringify({anchor,rank:last.sort_rank,at:Number(last.sort_at),id:last.id})).toString('base64url'):null};
+ });
+}
+
+export async function completeSession(actor:Actor,id:string,input:{expectedVersion:number;clientActionId:string}) {
+ await refreshActionQuota(actor);
+ return actorTransaction(actor,async db=>{
+  await actionQuota(db,actor);
+  const old=await idempotent(db,actor,'complete',input.clientActionId,{id,version:input.expectedVersion});
+  if(old)return {id};
+  await touchAction(db,actor,id);
+  const session=await ownedSession(db,actor,id,true);requireEditable(session,input.expectedVersion);
+  if(session.processing_token&&session.processing_until>new Date())throw new AppError('PROCESSING','Wait for the assistant to finish before completing this request.',409);
+  await db.query("UPDATE public.va_proposals SET status='superseded' WHERE session_id=$1 AND status='ready'",[id]);
+  await db.query("UPDATE public.va_sessions SET state='completed',version=version+1,processing_token=NULL,processing_until=NULL,updated_at=now() WHERE id=$1",[id]);
+  await appendTurn(db,actor,id,'assistant','Request complete.');
+  await finishAction(db,actor,id,'completed');
+  await finishKey(db,actor,'complete',input.clientActionId,id);
+  return {id};
  });
 }

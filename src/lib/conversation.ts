@@ -10,6 +10,8 @@ import { hash } from './crypto';
 import { agenda,agendaReply,taskDraft } from './agenda';
 import { requireModule } from './workspace-modules';
 import { AppError,ProviderError } from './errors';
+import { classifyConversationControl } from './conversation-control';
+import { assertActionActive,finishAction,refreshActionQuota } from './action-quota';
 
 export async function connectionFor(actor:Actor) {
  const {rows}=await pool().query(`SELECT c.*,w.config_version FROM private.va_calendar_connections c
@@ -24,8 +26,10 @@ export async function localBusy(calendarId:string,snapshot:EventSnapshot,exclude
 }
 export async function processSession(actor:Actor,id:string,extract=true) {
  const processingStarted=performance.now();
+ await refreshActionQuota(actor);
  const token=randomUUID();
  const claimed=await actorTransaction(actor,async db=>{
+   await assertActionActive(db,actor,id);
    const s=await ownedSession(db,actor,id,true);
    if(!['captured','failed'].includes(s.state)||s.content_redacted_at||(s.processing_until&&s.processing_until.getTime()>Date.now())) return null;
    const turns=await db.query(`SELECT body,created_at,
@@ -39,7 +43,9 @@ export async function processSession(actor:Actor,id:string,extract=true) {
  if(!claimed) return;
  let facts=claimed.facts;
  try {
-   if(extract) {
+   if(extract&&classifyConversationControl(claimed.text,true)==='cancel') {
+     facts={...claimed.facts,intent:'cancel',ambiguities:[]};
+   }else if(extract) {
      const result=await getLanguageProvider().extract(claimed.text,claimed.facts,claimed.createdAt,claimed.context);facts=result.facts;
      await pool().query(`INSERT INTO public.va_usage_events(workspace_id,worker_id,session_id,provider,provider_request_id,operation,input_tokens,output_tokens,cost_status,estimated_cost_aed)
        VALUES($1,$2,$3,$4,$5,'extract',$6,$7,$8,$9) ON CONFLICT DO NOTHING`,[actor.workspaceId,actor.id,id,config().mode==='demo'&&process.env.LANGUAGE_PROVIDER!=='groq'?'simulated':'groq',result.usage.requestId,result.usage.inputTokens,result.usage.outputTokens,config().mode==='demo'&&process.env.LANGUAGE_PROVIDER!=='groq'?'not_applicable':'unknown',config().mode==='demo'&&process.env.LANGUAGE_PROVIDER!=='groq'?0:null]);
@@ -49,8 +55,14 @@ export async function processSession(actor:Actor,id:string,extract=true) {
    let reply:string|null=null,ready:EventSnapshot|null=null,summary:AgendaSummary|null=null,draft:TaskDraft|null=null;
    let state:SessionState='clarifying';
    let connection:Awaited<ReturnType<typeof connectionFor>>|null=null;
-   if(offScope){
-     reply=facts.intent==='unsupported'?'I can book appointments, save notes, assign tasks, and check your agenda. That action isn’t available.':'I can help with appointments, notes, tasks, or your agenda. What would you like?';
+   if(facts.intent==='cancel'){
+     if(facts.ambiguities.length){
+       reply=facts.ambiguities[0];facts=claimed.facts;
+     }else{
+       facts={...claimed.facts,intent:'cancel',ambiguities:[]};state='cancelled';reply='Request cancelled.';
+     }
+   }else if(offScope){
+     reply=facts.intent==='unsupported'?( /\b(?:cancel|delete|reschedule)\b.*\b(?:saved|booked|existing|yesterday)\b/i.test(claimed.text)?'I can discard this draft, but I can’t change or cancel saved appointments.':'I can help with appointments, notes, tasks, and your agenda. That action isn’t available.'):(facts.ambiguities[0]??'I can help with appointments, notes, tasks, or your agenda. What would you like?');
      // An unrelated question must not erase an unconfirmed draft or trigger a write.
      facts=claimed.facts;
    }else if(facts.intent==='agenda'){
@@ -76,10 +88,13 @@ export async function processSession(actor:Actor,id:string,extract=true) {
        if(clash)reply=busyMessage(clash);else {ready=valid.snapshot;state='ready';reply='Appointment ready. Review and confirm.';}
      }
    }
+   await refreshActionQuota(actor);
    await actorTransaction(actor,async db=>{
+     await assertActionActive(db,actor,id);
      const current=await ownedSession(db,actor,id,true);
      if(current.version!==claimed.version||current.processing_token!==token||!['captured','failed'].includes(current.state)) return;
      const nextVersion=claimed.version+1;
+     if(state==='cancelled')await db.query("UPDATE public.va_proposals SET status='superseded' WHERE session_id=$1 AND status='ready'",[id]);
      if(ready&&connection) {
        const active=await db.query(`SELECT c.calendar_id,w.config_version FROM private.va_calendar_connections c JOIN public.va_workspaces w ON w.id=c.workspace_id
          WHERE c.workspace_id=$1 AND c.status='connected'`,[actor.workspaceId]);
@@ -93,9 +108,13 @@ export async function processSession(actor:Actor,id:string,extract=true) {
      await appendTurn(db,actor,id,'assistant',reply??'Add a little more detail to continue.');
      await db.query(`WITH updated AS (UPDATE public.va_sessions SET facts=$2,state=$3,version=$4,assistant_view=$8,processing_token=NULL,processing_until=NULL,updated_at=now() WHERE id=$1 RETURNING id)
        INSERT INTO private.va_operation_events(workspace_id,actor_worker_id,subject_id,event_type,detail) SELECT $5,$6,id,'conversation.processed',$7::jsonb FROM updated`,[id,JSON.stringify(facts),state,nextVersion,actor.workspaceId,actor.id,{userCode:actor.userCode??'worker',alias:actor.displayName,sessionId:id,status:state,processingMsBeforeCommit:Math.round(performance.now()-processingStarted)},{agenda:summary,taskDraft:draft}]);
+     if(state==='cancelled')await finishAction(db,actor,id,'cancelled');
    });
  } catch(error) {
+   await refreshActionQuota(actor);
+   if(error instanceof AppError&&error.code.startsWith('ACTION_'))throw error;
    await actorTransaction(actor,async db=>{
+     await assertActionActive(db,actor,id);
      const s=await ownedSession(db,actor,id,true);if(s.processing_token!==token||s.version!==claimed.version) return;
      const message=error instanceof AppError&&error.status===403?error.message:error instanceof ProviderError&&error.code.startsWith('CALENDAR')?'Calendar access or availability could not be verified. Your request is saved. Retry, edit the details, or save it as a note.':'The assistant could not finish this request. Your words are saved. Retry or enter the details using Edit.';
      await appendTurn(db,actor,id,'assistant',message);

@@ -32,3 +32,15 @@ The microphone is the wide primary control. A keyboard icon slides the composer 
 Migrations 007 and 008 add assignments and assistant conversation states. The existing Vercel build command applies migrations before building; no additional environment variables are required. Local tests use simulated providers. Live Groq quality and external-calendar accuracy require provider access and pilot acceptance testing; the current environment's Groq probe returned PROVIDER_UNREACHABLE.
 
 Validated on 8 October 2026: 71 unit tests, 44 database tests, 13 browser scenarios, and the production build. Layout checks at 320, 390 and 1440 pixels found no page overflow. Browser tests cover corrections, assignment, agenda cards, confirmations, mode switching, draft preservation, new-chat approval, recording failures and permission isolation.
+
+## User action allowance and HQ
+
+Each stable user code has three assistant request flows until an administrator resets it in HQ. Administrators are exempt. A first accepted typed request or transcript reserves one slot; clarification turns and corrections reuse that slot. Tapping Confirm or Complete consumes the action once. Explicitly cancelling a started draft also consumes one action. An unfinished flow consumes its action after three minutes without accepted user activity. Reading, polling and model replies do not extend the timer. Starting a new chat does not save the abandoned draft or release its reservation: it expires after inactivity.
+
+Concurrent tabs share the same durable allowance. A third active flow can still receive follow-ups and confirmation even when no unreserved slots remain. After all three actions finish, voice and text controls lock with “Request limit reached. Contact your admin.” Dashboard viewing remains available, while dashboard write controls are disabled. Dashboard edits are not additional conversational flows; they are blocked once the conversational allowance is exhausted.
+
+HQ refreshes user counts every three seconds and on focus. It displays completed actions, active flows, remaining capacity and permissions. Reset is administrator-only and restores three slots for that user, invalidating old unconfirmed drafts. Accepted calendar writes and uncertain-booking recovery remain valid across reset/exhaustion; they cannot create another action through replay.
+
+Quota start, completion, timeout, cancellation and reset are audited. Three minutes refers to inactivity since the last accepted user interaction, rather than the total duration of an active conversation. Expiry is applied on the next quota check or interaction, including HQ polling; there is no background scheduler required. Migration 009 creates the quota ledger and binds speech authorizations to conversations. No new environment variables are required.
+
+Clear commands such as “cancel it,” “never mind” and “stop this request” are handled before the language model, including during follow-ups. Cancellation words inside note text remain content. Mixed cancellation/new requests require clarification. Saved calendar changes and deletions remain unsupported.

@@ -1,4 +1,4 @@
-import { beforeAll,afterAll,it,expect,vi } from 'vitest';
+import { beforeAll,beforeEach,afterAll,it,expect,vi } from 'vitest';
 import { readFile,readdir } from 'node:fs/promises';
 import { Pool } from 'pg';
 import { randomUUID } from 'node:crypto';
@@ -9,6 +9,7 @@ import type { Actor,Facts } from '../../src/lib/domain';
 import { agenda,taskDraft } from '../../src/lib/agenda';
 import { emptyFacts } from '../../src/lib/domain';
 import { ProviderError } from '../../src/lib/errors';
+import {resetActionFixtures} from './quota-fixture';
 const mocks=vi.hoisted(()=>({extract:vi.fn(),queryBusy:vi.fn()}));
 vi.mock('../../src/lib/providers',()=>({getLanguageProvider:()=>({extract:mocks.extract}),getCalendarProvider:async()=>({queryBusy:mocks.queryBusy})}));
 const url=process.env.TEST_DATABASE_URL!;
@@ -30,6 +31,7 @@ beforeAll(async()=>{
  await admin.query("INSERT INTO private.va_calendar_connections(workspace_id,calendar_id,calendar_label,provider) VALUES($1,'test','Test','simulated')",[actor.workspaceId]);
 });
 afterAll(async()=>{await admin.end();await pool().end();});
+beforeEach(async()=>{await resetActionFixtures(admin,[actor,other]);});
 it('anchors extraction to persisted input time and preserves extracted facts when calendar is unavailable',async()=>{
  const saved=await capture(actor,{text:'Book inspection tomorrow',source:'typed',clientCaptureId:randomUUID()});
  const anchor='2026-10-07T19:59:00.000Z';
@@ -68,8 +70,8 @@ it('drafts a note without writing, saves its corrected text once, then closes th
  const record=(await admin.query('SELECT title,body FROM va_records WHERE session_id=$1',[first.id])).rows;
  expect(record).toEqual([{title:'Call customer',body:'Call customer'}]);
  const final=await sessionView(actor,first.id);expect(final.state).toBe('note_saved');
- await expect(submitTurn(actor,first.id,{text:'Change again',expectedVersion:final.version,clientTurnId:randomUUID()})).rejects.toMatchObject({code:'SESSION_LOCKED'});
- await expect(editFacts(actor,first.id,{facts:{title:'Changed'},expectedVersion:final.version,clientActionId:randomUUID()})).rejects.toMatchObject({code:'SESSION_LOCKED'});
+ await expect(submitTurn(actor,first.id,{text:'Change again',expectedVersion:final.version,clientTurnId:randomUUID()})).rejects.toMatchObject({code:'ACTION_CLOSED'});
+ await expect(editFacts(actor,first.id,{facts:{title:'Changed'},expectedVersion:final.version,clientActionId:randomUUID()})).rejects.toMatchObject({code:'ACTION_CLOSED'});
 });
 it('saves the corrected full note body separately from its concise title',async()=>{
  const original='Supplier details that should be replaced. '.repeat(12).trim();
@@ -95,8 +97,8 @@ it('drafts an assigned task, revalidates its recipient on confirm, and prevents 
  const rows=(await admin.query('SELECT title,assignee_worker_id FROM va_tasks WHERE source_session_id=$1',[view.id])).rows;
  expect(rows).toEqual([{title:'Check stock',assignee_worker_id:other.id}]);
  const final=await sessionView(actor,view.id);expect(final.state).toBe('task_saved');
- await expect(submitTurn(actor,view.id,{text:'Change task',expectedVersion:final.version,clientTurnId:randomUUID()})).rejects.toMatchObject({code:'SESSION_LOCKED'});
- await expect(saveNote(actor,view.id,{expectedVersion:final.version,clientActionId:randomUUID()})).rejects.toMatchObject({code:'SESSION_LOCKED'});
+ await expect(submitTurn(actor,view.id,{text:'Change task',expectedVersion:final.version,clientTurnId:randomUUID()})).rejects.toMatchObject({code:'ACTION_CLOSED'});
+ await expect(saveNote(actor,view.id,{expectedVersion:final.version,clientActionId:randomUUID()})).rejects.toMatchObject({code:'ACTION_CLOSED'});
 });
 it('asks about invalid recipients and dates rather than assigning silently; self remains a valid default',async()=>{
  expect((await taskDraft(actor,{...emptyFacts(),intent:'task',title:'Check stock',assigneeUserCode:'someone'})).draft).toBeNull();

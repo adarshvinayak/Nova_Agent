@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({ query: vi.fn(), transcribe: vi.fn(), limit: vi.fn(), worker: { id: '20000000-0000-4000-8000-000000000001', workspaceId: '10000000-0000-4000-8000-000000000001' } }));
 vi.mock('../../src/lib/auth', () => ({ actor: async () => mocks.worker }));
-vi.mock('../../src/lib/db', () => ({ actorTransaction: async (_: unknown, fn: (db: { query: typeof mocks.query }) => unknown) => fn({ query: mocks.query }), pool: () => ({ query: mocks.query }) }));
+vi.mock('../../src/lib/db', () => ({ actorTransaction: async (_: unknown, fn: (db: { query: typeof mocks.query }, member:{role:string;permissions:Record<string,boolean>}) => unknown) => fn({ query: mocks.query },{role:'user',permissions:{capture:true}}), pool: () => ({ query: mocks.query }) }));
 vi.mock('../../src/lib/providers/speech', () => ({ transcribeSpeechAudio: mocks.transcribe }));
-vi.mock('../../src/lib/http', async original => ({ ...await original<typeof import('../../src/lib/http')>(), rateLimit: mocks.limit }));
+vi.mock('../../src/lib/rate-limit',()=>({actorRateLimit:mocks.limit}));
+vi.mock('../../src/lib/action-quota',()=>({refreshActionQuota:async()=>({remaining:1}),actionQuota:async()=>({remaining:1}),touchAction:async()=>undefined}));
 import { POST } from '../../src/app/api/speech/transcribe/route';
 const sessionId = '30000000-0000-4000-8000-000000000001';
 function request(origin = 'http://localhost:3000', duration = 5, type = 'audio/webm') {

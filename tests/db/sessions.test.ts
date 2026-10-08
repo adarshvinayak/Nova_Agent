@@ -1,10 +1,11 @@
-import { beforeAll,afterAll,describe,it,expect } from 'vitest';
+import { beforeAll,beforeEach,afterAll,describe,it,expect } from 'vitest';
 import { readFile,readdir } from 'node:fs/promises';
 import { Pool } from 'pg';
 import { randomUUID } from 'node:crypto';
 import type { Actor } from '../../src/lib/domain';
 import { capture,sessionView,submitTurn,saveNote,dashboard } from '../../src/lib/sessions';
 import { pool } from '../../src/lib/db';
+import {resetActionFixtures} from './quota-fixture';
 const testUrl=process.env.TEST_DATABASE_URL!;
 const admin=new Pool({connectionString:testUrl});
 const workspace=randomUUID();
@@ -20,6 +21,7 @@ beforeAll(async()=>{
   for(const w of [a,b]) await admin.query('INSERT INTO va_workers(id,workspace_id,email,display_name) VALUES($1,$2,$3,$4)',[w.id,workspace,w.email,w.displayName]);
 });
 afterAll(async()=>{await admin.end();await pool().end();});
+beforeEach(async()=>{await resetActionFixtures(admin,[a,b]);});
 describe('durable owned capture',()=>{
  it('replays exactly without a second user turn and rejects changed content',async()=>{
    const input={text:'Inspect warehouse tomorrow',source:'typed',clientCaptureId:randomUUID()};

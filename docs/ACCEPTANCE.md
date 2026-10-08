@@ -63,3 +63,13 @@ Local automated tests can establish domain behavior, repository semantics and si
 Evaluate the original proposed performance targets only with real providers: at least 30 representative turns where practical, p95 agent turn at most five seconds and resolved booking at most eight seconds; report errors/uncertain outcomes and sample size. Field accuracy and capture success need user-reviewed realistic scenarios. These targets are proposed pilot criteria, not claims based on mocks.
 
 Release requires all applicable browser safety/isolation/recovery checks, provider/data configuration, usable deployment and controlled owner-approved booking. Optional iOS tests and general external calendar synchronization are outside the browser MVP release gate.
+
+## User allowances and HQ
+
+- Complete three user flows using Confirm/Complete/cancellation: each consumes exactly one action regardless of follow-up count; further capture, text and voice attempts fail server-side.
+- Leave a flow idle for more than three minutes: quota polling expires it once; returning or late provider results cannot revive it. Other active flows remain valid.
+- With two used actions and one active flow, follow-ups and its final confirmation still work; opening a fourth flow fails.
+- Exhausted users can browse their dashboard; write controls remain disabled. Administrators can continue using the assistant without this allowance or authenticated user burst limits.
+- HQ displays per-user counts live, permits permission changes, and resets only the selected user to three available slots. Non-administrators cannot read HQ or reset anyone.
+- During appointment follow-ups say “cancel it”: receive a brief cancellation, no repeated missing-field question, no event write, one action consumed. A note containing “cancel it” must remain a note.
+- An uncertain booking confirmed as the third action can still be checked; accepted confirmation replay creates neither a second event nor an additional quota charge.

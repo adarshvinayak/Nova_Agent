@@ -1,4 +1,4 @@
-import { beforeAll,afterAll,describe,it,expect } from 'vitest';
+import { beforeAll,beforeEach,afterAll,describe,it,expect } from 'vitest';
 import { readFile,readdir } from 'node:fs/promises';
 import { Pool } from 'pg';
 import { randomUUID } from 'node:crypto';
@@ -8,6 +8,7 @@ import { applyRetention } from '../../scripts/retention-core';
 import { capture,editFacts,appendTurn } from '../../src/lib/sessions';
 import { actorTransaction,pool } from '../../src/lib/db';
 import { InternalCalendarProvider } from '../../src/lib/providers/internal-calendar';
+import {resetActionFixtures} from './quota-fixture';
 const testUrl=process.env.TEST_DATABASE_URL!;
 const admin=new Pool({connectionString:testUrl});const workspace=randomUUID();
 const a:Actor={id:randomUUID(),workspaceId:workspace,email:'a@test.local',displayName:'Temporary A'};
@@ -21,6 +22,7 @@ beforeAll(async()=>{
  for(const [who,code,role] of [[a,'user1','user'],[b,'user2','user'],[owner,'admin','admin']] as const)await admin.query('INSERT INTO va_workers(id,workspace_id,email,display_name,user_code,role) VALUES($1,$2,$3,$4,$5,$6)',[who.id,workspace,who.email,who.displayName,code,role]);
 });
 afterAll(async()=>{await admin.end();await pool().end();});
+beforeEach(async()=>{await resetActionFixtures(admin,[a,b],owner);});
 describe('shared workspace modules and permissions',()=>{
  it('shares tasks while keeping audit logs own and admin comprehensive',async()=>{
   const task=await saveTask(a,{title:'Install sensor'});await saveTask(b,{id:task.id,title:'Install sensor',status:'done'});

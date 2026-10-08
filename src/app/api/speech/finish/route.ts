@@ -1,15 +1,16 @@
+import { actorRateLimit } from '@/lib/rate-limit';
 import { z } from 'zod';
 import { actor } from '@/lib/auth';
 import { actorTransaction } from '@/lib/db';
 import { AppError } from '@/lib/errors';
-import { api, jsonBody, mutationGuard, rateLimit } from '@/lib/http';
+import { api, jsonBody, mutationGuard } from '@/lib/http';
 
 const inputSchema = z.object({ speechSessionId: z.uuid(), durationSeconds: z.number().finite().min(0).max(120),
   status: z.enum(['finished', 'failed', 'abandoned']), transcript:z.string().max(8000).optional(), failureReason:z.string().max(500).optional(), endMode:z.enum(['manual','auto']).optional(), endReason:z.enum(['manual','pause','limit','error','abandoned']).optional(), captureMode:z.enum(['stream','upload']).optional(), providerRequestId: z.string().max(128).regex(/^[a-zA-Z0-9_-]+$/).optional() }).strict();
 
 export async function POST(request: Request) {
   return api(async () => {
-    mutationGuard(request); const worker = await actor(); await rateLimit(`speech-finish:${worker.id}`, 10);
+    mutationGuard(request); const worker = await actor(); await actorRateLimit(worker,`speech-finish:${worker.id}`, 10);
     const input = inputSchema.parse(await jsonBody(request));
     return actorTransaction(worker, async db => {
       const selected = await db.query('SELECT status FROM public.va_speech_sessions WHERE id=$1 AND worker_id=$2 AND workspace_id=$3 FOR UPDATE', [input.speechSessionId, worker.id, worker.workspaceId]);

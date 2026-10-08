@@ -7,6 +7,7 @@ import { getCalendarProvider } from './providers';
 import { sameSnapshot } from './providers/calendar';
 import { overlaps } from './scheduling';
 import { AppError,ProviderError } from './errors';
+import { actionQuota,refreshActionQuota,touchAction,finishAction } from './action-quota';
 import type { Actor,EventSnapshot,CalendarProvider,CalendarEvent } from './domain';
 type AttemptRow={id:string;workspace_id:string;worker_id:string;session_id:string;proposal_id:string;calendar_id:string;event_id:string;intent_hash:string;status:string;recovery_generation:number;recovery_token:string|null;expires_at:Date;config_version:number;snapshot:EventSnapshot};
 async function attempt(actor:Actor,id:string):Promise<AttemptRow> {
@@ -15,14 +16,21 @@ async function attempt(actor:Actor,id:string):Promise<AttemptRow> {
  if(!rows[0]) throw new AppError('NOT_FOUND','This booking could not be found.',404);return rows[0];
 }
 export async function reserveBooking(actor:Actor,proposalId:string,input:{proposalVersion:number;snapshotHash:string;idempotencyKey:string}) {
+ await refreshActionQuota(actor);
  return actorTransaction(actor,async db=>{
+   // Quota comes before idempotency/session locks; timeout charging commits even if this request rejects.
+   await actionQuota(db,actor);
    const old=await idempotent(db,actor,'confirm',input.idempotencyKey,{proposalId,version:input.proposalVersion,hash:input.snapshotHash});
    if(old) return {id:old.resource_id as string,created:false};
    const first=await db.query('SELECT session_id FROM public.va_proposals WHERE id=$1 AND worker_id=$2 AND workspace_id=$3',[proposalId,actor.id,actor.workspaceId]);
    if(!first.rows[0]) throw new AppError('NOT_FOUND','This confirmation could not be found.',404);
+   // An already authorized attempt remains available after quota exhaustion or an admin reset.
+   const authorized=await db.query('SELECT id FROM public.va_attempts WHERE proposal_id=$1',[proposalId]);
+   if(!authorized.rowCount) await touchAction(db,actor,first.rows[0].session_id);
    const s=await ownedSession(db,actor,first.rows[0].session_id,true);
    const {rows}=await db.query('SELECT * FROM public.va_proposals WHERE id=$1 FOR UPDATE',[proposalId]);const p=rows[0];
    if(p.version!==input.proposalVersion||p.snapshot_hash!==input.snapshotHash) throw new AppError('STALE_PROPOSAL','Review the latest confirmation card.',409);
+   // Re-read after the session lock: administrators bypass quota serialization.
    const existing=await db.query('SELECT id FROM public.va_attempts WHERE proposal_id=$1',[proposalId]);
    let id=existing.rows[0]?.id as string|undefined;
    if(!id) {
@@ -35,6 +43,7 @@ export async function reserveBooking(actor:Actor,proposalId:string,input:{propos
        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,[id,actor.workspaceId,actor.id,s.id,proposalId,input.idempotencyKey,p.snapshot_hash,p.calendar_id,'vc'+id.replaceAll('-',''),p.starts_at,p.ends_at,p.time_zone]);
      await db.query("UPDATE public.va_proposals SET status='consumed' WHERE id=$1",[proposalId]);
      await db.query("UPDATE public.va_sessions SET state='confirming',version=version+1,processing_token=NULL,processing_until=NULL,updated_at=now() WHERE id=$1",[s.id]);
+     await finishAction(db,actor,s.id,'confirmed');
    }
    await db.query("UPDATE public.va_idempotency SET status='completed',resource_id=$4,response=$5 WHERE worker_id=$1 AND operation=$2 AND idempotency_key=$3",[actor.id,'confirm',input.idempotencyKey,id,JSON.stringify({attemptId:id,sessionId:s.id})]);
    return {id,created:!existing.rowCount};

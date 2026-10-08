@@ -3,6 +3,7 @@ import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import type { Actor } from './domain';
 import { actorTransaction } from './db';
+import { actionQuota,refreshActionQuota } from './action-quota';
 import { AppError } from './errors';
 export type ModuleName='tasks'|'calendar'|'audit'|'settings'|'capture';
 export async function moduleTransaction<T>(actor:Actor,module:ModuleName,work:(db:PoolClient)=>Promise<T>){
@@ -40,7 +41,8 @@ export async function createTaskInTransaction(db:PoolClient,actor:Actor,input:Ta
  if(!id)throw new AppError('CONFLICT','Task creation could not be completed.',409);
  return {id,assigneeUserCode:target.user_code};
 }
-export async function saveTask(actor:Actor,input:unknown){const data=taskInput.parse(input);return moduleTransaction(actor,'tasks',async db=>{
+export async function saveTask(actor:Actor,input:unknown){const data=taskInput.parse(input);await assertDashboardWritable(actor);return moduleTransaction(actor,'tasks',async db=>{
+ await assertDashboardWritableInTransaction(db,actor);
  if(!data.id)return createTaskInTransaction(db,actor,data);
  const target=data.assigneeUserCode?await taskAssignee(db,actor,data.assigneeUserCode):null;
  const result=await db.query(`UPDATE public.va_tasks SET title=$3,status=$4,assignee_worker_id=coalesce($5,assignee_worker_id),due_at=CASE WHEN $6::boolean THEN $7::timestamptz ELSE due_at END,updated_at=now() WHERE id=$1 AND workspace_id=$2 RETURNING id`,[data.id,actor.workspaceId,data.title,data.status,target?.id??null,data.dueAt!==undefined,data.dueAt??null]);
@@ -49,7 +51,8 @@ export async function saveTask(actor:Actor,input:unknown){const data=taskInput.p
 const timestamp=z.string().datetime({offset:true});
 const eventInput=z.object({title:z.string().trim().min(1).max(300),start:timestamp,end:timestamp,location:z.string().trim().max(500).nullable().optional()}).refine(x=>Date.parse(x.end)>Date.parse(x.start),'End must follow start');
 export async function events(actor:Actor,start?:string,end?:string){const range=start&&end?{start:timestamp.parse(start),end:timestamp.parse(end)}:null;return moduleTransaction(actor,'calendar',async db=>({events:(await db.query(`SELECT e.id,e.event_id AS "eventId",e.title,e.location,e.starts_at AS "start",e.ends_at AS "end",e.time_zone AS "timeZone",w.user_code AS "userCode",e.worker_id AS "workerId",e.status FROM private.va_internal_events e JOIN public.va_workers w ON w.id=e.worker_id WHERE e.workspace_id=$1 AND e.status='confirmed' AND ($2::timestamptz IS NULL OR e.ends_at>$2) AND ($3::timestamptz IS NULL OR e.starts_at<$3) ORDER BY e.starts_at LIMIT 500`,[actor.workspaceId,range?.start??null,range?.end??null])).rows}));}
-export async function saveEvent(actor:Actor,input:unknown){const data=eventInput.parse(input);await requireModule(actor,'calendar');const {connectedBusy}=await import('./providers/internal-calendar');const external=await connectedBusy(actor,data.start,data.end);if(external.some(e=>Date.parse(e.start)<Date.parse(data.end)&&Date.parse(e.end)>Date.parse(data.start)))throw new AppError('CONFLICT','This time overlaps a connected calendar appointment. Choose another time.',409);return moduleTransaction(actor,'calendar',async db=>{
+export async function saveEvent(actor:Actor,input:unknown){const data=eventInput.parse(input);await assertDashboardWritable(actor);await requireModule(actor,'calendar');const {connectedBusy}=await import('./providers/internal-calendar');const external=await connectedBusy(actor,data.start,data.end);if(external.some(e=>Date.parse(e.start)<Date.parse(data.end)&&Date.parse(e.end)>Date.parse(data.start)))throw new AppError('CONFLICT','This time overlaps a connected calendar appointment. Choose another time.',409);return moduleTransaction(actor,'calendar',async db=>{
+ await assertDashboardWritableInTransaction(db,actor);
  // Serialize manual creation with internal provider insertion for the same workspace.
  await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`internal-calendar:${actor.workspaceId}`]);
  const busy=await db.query(`SELECT 1 FROM private.va_internal_events WHERE workspace_id=$1 AND status='confirmed' AND starts_at<$3::timestamptz AND ends_at>$2::timestamptz UNION ALL SELECT 1 FROM public.va_attempts WHERE workspace_id=$1 AND calendar_id=$4 AND status IN ('reserved','writing','unknown','succeeded') AND starts_at<$3::timestamptz AND ends_at>$2::timestamptz LIMIT 1`,[actor.workspaceId,data.start,data.end,`internal:${actor.workspaceId}`]);
@@ -94,3 +97,12 @@ export async function auditOperation(actor:Actor,eventType:string,subjectId:stri
  });
 }
 export async function requireModule(actor:Actor,module:ModuleName){return moduleTransaction(actor,module,async()=>undefined);}
+
+export async function assertDashboardWritableInTransaction(db:PoolClient,actor:Actor){
+ const quota=await actionQuota(db,actor);
+ if(quota.exhausted)throw new AppError('ACTION_LIMIT_REACHED','Request limit reached. Contact your admin.',429);
+}
+export async function assertDashboardWritable(actor:Actor){
+ const quota=await refreshActionQuota(actor);
+ if(quota.exhausted)throw new AppError('ACTION_LIMIT_REACHED','Request limit reached. Contact your admin.',429);
+}

@@ -37,3 +37,9 @@ To revoke a worker, an authorized database operator sets `va_workers.active=fals
 ## Current runtime revision
 
 The user requested pilot selector/month-code login and a built-in calendar. Set PILOT_LOGIN=true and run npx tsx scripts/pilot-setup.ts after migrations; administrator code uses current UAE MMYYYY. Provider override flags LANGUAGE_PROVIDER=groq and SPEECH_PROVIDER=deepgram activate supplied accounts independently of local mode. Supabase credentials are saved but its remote database has not been migrated because connectivity is unavailable. Current runtime uses local PostgreSQL. See VERIFICATION.md for actual checks and CALENDAR_CONNECTORS.md for external-calendar setup. All module permissions start enabled; administrators manage each permanent user code's access. The prior invite-based identity/mandatory Google destination applies only when intentionally returning to that earlier deployment model.
+
+## Request allowances
+
+Administrators manage each user's three-flow allowance from HQ. Counts persist across logins and deployments and do not reset daily. HQ polling applies three-minute inactivity expiry and refreshes counts every three seconds. Reset restores three available flows, closes unconfirmed old drafts and records who performed the reset. Existing accepted/uncertain calendar attempts remain recoverable.
+
+Migration 009 is applied by the existing Vercel build command; no new secrets or environment values are needed. The private quota ledger stores IDs, counts and timestamps without conversation text. It remains durable for allowance/idempotency accounting; normal conversation and audit-content retention still applies. Historical completed sessions are not charged retrospectively.

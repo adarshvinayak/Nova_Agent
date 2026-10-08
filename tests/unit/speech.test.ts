@@ -2,9 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({ query: vi.fn(), issue: vi.fn(), limit: vi.fn(),
   worker: { id: '20000000-0000-4000-8000-000000000001', workspaceId: '10000000-0000-4000-8000-000000000001', email: 'test@example.test', displayName: 'Test' } }));
 vi.mock('../../src/lib/auth', () => ({ actor: async () => mocks.worker }));
-vi.mock('../../src/lib/db', () => ({ actorTransaction: async (_actor: unknown, fn: (db: { query: typeof mocks.query }) => unknown) => fn({ query: mocks.query }), pool: () => ({ query: mocks.query }) }));
+vi.mock('../../src/lib/db', () => ({ actorTransaction: async (_actor: unknown, fn: (db: { query: typeof mocks.query }, member:{role:string;permissions:Record<string,boolean>}) => unknown) => fn({ query: mocks.query },{role:'user',permissions:{capture:true}}), pool: () => ({ query: mocks.query }) }));
 vi.mock('../../src/lib/providers', () => ({ issueSpeechToken: mocks.issue }));
-vi.mock('../../src/lib/http', async importOriginal => ({ ...await importOriginal<typeof import('../../src/lib/http')>(), rateLimit: mocks.limit }));
+vi.mock('../../src/lib/rate-limit',()=>({actorRateLimit:mocks.limit}));
+vi.mock('../../src/lib/action-quota',()=>({refreshActionQuota:async()=>({remaining:1}),actionQuota:async()=>({remaining:1}),touchAction:async()=>undefined}));
 import { POST as token } from '../../src/app/api/speech/token/route';
 import { POST as finish } from '../../src/app/api/speech/finish/route';
 
@@ -30,8 +31,8 @@ describe('speech API authorization and usage', () => {
     const result = await token(request());
     expect(result.status).toBe(200); expect(result.headers.get('cache-control')).toBe('no-store');
     expect(await result.json()).toMatchObject({ speechSessionId: sessionId, accessToken: 'temporary' });
-    expect(mocks.query.mock.calls[0][1]).toEqual([mocks.worker.workspaceId, mocks.worker.id]);
-    expect(mocks.limit).toHaveBeenCalledWith(`speech-token:${mocks.worker.id}`, 5);
+    expect(mocks.query.mock.calls[0][1]).toEqual([mocks.worker.workspaceId, mocks.worker.id,null]);
+    expect(mocks.limit).toHaveBeenCalledWith(mocks.worker,`speech-token:${mocks.worker.id}`, 5);
   });
   it('marks the durable session failed if credential issuance fails', async () => {
     mocks.query.mockResolvedValue({ rows: [{ id: sessionId }], rowCount: 1 });

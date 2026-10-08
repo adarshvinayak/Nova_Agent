@@ -1,4 +1,4 @@
-import {test,expect} from '@playwright/test';
+import {test,expect} from './fixtures';
 
 test('mobile voice request sends and confirms on the start page',async({page})=>{
  await page.setViewportSize({width:390,height:844});

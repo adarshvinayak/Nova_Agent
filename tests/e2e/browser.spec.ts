@@ -1,4 +1,5 @@
-import { test,expect,type Page } from '@playwright/test';
+import {type Page} from '@playwright/test';
+import {test,expect} from './fixtures';
 async function signIn(page:Page,worker=1){await page.goto('/');await page.getByRole('combobox',{name:'User code',exact:true}).selectOption(`user${worker}`);await page.getByLabel('Your name',{exact:true}).fill(`Browser worker ${worker}`);await page.getByRole('button',{name:'Open workspace',exact:true}).click();await expect(page.getByRole('button',{name:'Tap to speak',exact:true})).toBeVisible();}
 test('reviewed note persists through reload and is isolated from the other worker',async({page,browser})=>{
  await signIn(page);const title=`Browser note ${Date.now()}`;
@@ -56,7 +57,7 @@ test('tasks calendar audit and admin permissions operate in the pilot dashboard'
  await page.getByRole('button',{name:'Sign out',exact:true}).click();await page.getByRole('button',{name:'Admin',exact:true}).click();await page.getByLabel('Your name',{exact:true}).fill('Pilot administrator');
  const code=await page.evaluate(()=>{const parts=new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Dubai',month:'2-digit',year:'numeric'}).formatToParts(new Date());return parts.find(p=>p.type==='month')!.value+parts.find(p=>p.type==='year')!.value;});
  await page.getByLabel('Admin code',{exact:true}).fill(code);await page.getByRole('button',{name:'Open workspace',exact:true}).click();await expect(page.getByRole('button',{name:'Tap to speak',exact:true})).toBeVisible();
- await page.getByRole('button',{name:'Dashboard',exact:true}).click();await page.getByRole('button',{name:'Settings',exact:true}).click();await expect(page.getByRole('heading',{name:'User permissions',exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Dashboard',exact:true}).click();await page.getByRole('button',{name:'HQ',exact:true}).click();await expect(page.getByRole('heading',{name:'HQ',exact:true})).toBeVisible();await expect(page.getByRole('button',{name:'Reset requests for user2',exact:true})).toBeVisible();
  await page.getByRole('button',{name:'Audit logs',exact:true}).click();await expect(page.getByText('tasks · insert',{exact:true}).first()).toBeVisible();await expect(page.getByText('user2',{exact:true}).first()).toBeVisible();
  const settings=await page.request.get('/api/settings');expect(settings.ok()).toBe(true);const current=(await settings.json()).users.find((u:{userCode:string})=>u.userCode==='user2');
  const baseURL=new URL(page.url()).origin;

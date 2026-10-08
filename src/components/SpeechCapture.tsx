@@ -5,13 +5,13 @@ import { LoaderCircle, Mic, Square } from 'lucide-react';
 import { advanceVoiceActivity } from '@/lib/speech-activity';
 
 export type SpeechPhase = 'idle' | 'starting' | 'recording' | 'stopping';
-type Props = { onTranscript: (text: string, metadata?: { complete: boolean }) => void; disabled?: boolean; mode: 'demo' | 'live'; onRecordingChange?: (active: boolean) => void; onPhaseChange?: (phase: SpeechPhase) => void; onPreview?: (text: string) => void; onStatus?: (message: string) => void; endMode?: 'manual' | 'auto'; compact?: boolean };
+type Props = { onTranscript: (text: string, metadata?: { complete: boolean }) => void; disabled?: boolean; mode: 'demo' | 'live'; onRecordingChange?: (active: boolean) => void; onPhaseChange?: (phase: SpeechPhase) => void; onPreview?: (text: string) => void; onStatus?: (message: string) => void; endMode?: 'manual' | 'auto'; compact?: boolean; sessionId?:string; abortCapture?:boolean };
 type Phase = SpeechPhase;
 type Run = { stream: MediaStream | null; socket: WebSocket | null; recorder: MediaRecorder | null;
   sessionId: string | null; stoppedAt?:number; endReason?:'manual'|'pause'|'limit'; captureMode?: 'stream'|'upload'; started: number; final: Map<string, string>; providerRequestId?: string;
   ended: boolean; stopping: boolean; failure: string | null; maxTimer?: ReturnType<typeof setTimeout>; drainTimer?: ReturnType<typeof setTimeout>; vadTimer?: ReturnType<typeof setInterval>; audioContext?: AudioContext; sawVoice?: boolean; voicedMs?: number; lastVoiceAt?: number };
 
-export function SpeechCapture({ onTranscript, disabled = false, mode, onRecordingChange, onPhaseChange, onPreview, onStatus, endMode = 'manual', compact = false }: Props) {
+export function SpeechCapture({ onTranscript, disabled = false, mode, onRecordingChange, onPhaseChange, onPreview, onStatus, endMode = 'manual', compact = false, sessionId, abortCapture = false }: Props) {
   const [phase, setPhase] = useState<Phase>('idle');
   const [preview, setPreview] = useState('');
   const [message, setMessage] = useState('');
@@ -88,6 +88,11 @@ export function SpeechCapture({ onTranscript, disabled = false, mode, onRecordin
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (!abortCapture || !current.current) return;
+    finish(current.current, true); updatePhase('idle'); updatePreview(''); callbacks.current.onRecordingChange?.(false);
+  }, [abortCapture]);
+
   async function start() {
     if (current.current || disabled || mode !== 'live') return;
     const run: Run = { stream: null, socket: null, recorder: null, sessionId: null, started: 0,
@@ -109,7 +114,7 @@ export function SpeechCapture({ onTranscript, disabled = false, mode, onRecordin
       // Start authorization alongside the permission prompt, rather than adding its latency afterwards.
       // A late issued session is closed even if permission is denied or this component unmounts.
       const tokenPromise = fetch('/api/speech/token', { method: 'POST', credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(12_000) })
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({sessionId}), signal: AbortSignal.timeout(12_000) })
         .then(async response => {
           const data = await response.json();
           if (!response.ok) throw new Error(data.error?.message || 'Voice service is temporarily unavailable. Please try again.');

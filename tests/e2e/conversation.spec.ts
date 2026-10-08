@@ -1,4 +1,5 @@
-import {test,expect,type Page} from '@playwright/test';
+import {type Page} from '@playwright/test';
+import {test,expect} from './fixtures';
 async function signIn(page:Page,userCode='user1'){await page.goto('/');await page.getByRole('combobox',{name:'User code',exact:true}).selectOption(userCode);await page.getByLabel('Your name',{exact:true}).fill('Conversation tester');await page.getByRole('button',{name:'Open workspace',exact:true}).click();await expect(page.getByRole('button',{name:'Tap to speak',exact:true})).toBeVisible();}
 async function streaming(page:Page,transcript:string){
  await page.route('**/api/speech/token',route=>route.fulfill({json:{speechSessionId:'30000000-0000-4000-8000-000000000001',accessToken:'temporary-test-token',webSocketUrl:'wss://api.deepgram.com/v1/listen'}}));

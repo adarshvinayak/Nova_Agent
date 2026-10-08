@@ -1,9 +1,11 @@
+import { actorRateLimit } from '@/lib/rate-limit';
 import { z } from 'zod';
+import { actionQuota,refreshActionQuota,touchAction } from '@/lib/action-quota';
 import { actor } from '@/lib/auth';
 import { config } from '@/lib/config';
 import { actorTransaction } from '@/lib/db';
 import { AppError, ProviderError } from '@/lib/errors';
-import { api, rateLimit } from '@/lib/http';
+import { api } from '@/lib/http';
 import { transcribeSpeechAudio } from '@/lib/providers/speech';
 
 export const maxDuration = 60;
@@ -15,7 +17,7 @@ export async function POST(request: Request) {
     if (request.headers.get('origin') !== config().origin) throw new AppError('INVALID_ORIGIN', 'Please use the application to record a voice message.', 403);
     if (!request.headers.get('content-type')?.startsWith('multipart/form-data')) throw new AppError('INVALID_CONTENT', 'A recorded voice message is required.', 415);
     const worker = await actor();
-    await rateLimit(`speech-upload:${worker.id}`, 5);
+    await actorRateLimit(worker,`speech-upload:${worker.id}`, 5);
     const reader = request.body?.getReader();
     if (!reader) throw new AppError('INVALID_INPUT', 'No voice recording was received.', 422);
     const chunks: Uint8Array[] = []; let bytes = 0;
@@ -34,10 +36,15 @@ export async function POST(request: Request) {
     z.coerce.number().finite().min(0).max(120).parse(form.get('durationSeconds'));
     const audio = form.get('audio');
     if (!(audio instanceof File) || !audio.size || audio.size > MAX_AUDIO_BYTES || !SUPPORTED_AUDIO.has(audio.type.split(';')[0])) throw new AppError('INVALID_AUDIO', 'Record a shorter voice message using Safari or Chrome.', 422);
-    await actorTransaction(worker, async db => {
-      const found = await db.query('SELECT status FROM public.va_speech_sessions WHERE id=$1 AND worker_id=$2 AND workspace_id=$3 AND started_at>now()-interval \'5 minutes\' FOR UPDATE', [speechSessionId, worker.id, worker.workspaceId]);
+    await refreshActionQuota(worker);
+    await actorTransaction(worker, async (db,member) => {
+      if(member.role!=='admin'&&member.permissions.capture===false)throw new AppError('FORBIDDEN','You do not have access to voice capture.',403);
+      const quota=await actionQuota(db,worker);
+      const found = await db.query('SELECT status,action_session_id FROM public.va_speech_sessions WHERE id=$1 AND worker_id=$2 AND workspace_id=$3 AND started_at>now()-interval \'5 minutes\' FOR UPDATE', [speechSessionId, worker.id, worker.workspaceId]);
       if (!found.rowCount) throw new AppError('NOT_FOUND', 'Speech session not found. Tap the microphone to start again.', 404);
       if (found.rows[0].status !== 'issued') throw new AppError('SPEECH_ALREADY_USED', 'This voice recording has already been processed. Start a new recording.', 409);
+      if(found.rows[0].action_session_id)await touchAction(db,worker,found.rows[0].action_session_id);
+      else if(quota.remaining===0)throw new AppError('ACTION_LIMIT_REACHED','Request limit reached. Contact your admin.',429);
       await db.query("UPDATE public.va_speech_sessions SET status='streaming' WHERE id=$1 AND worker_id=$2 AND workspace_id=$3", [speechSessionId, worker.id, worker.workspaceId]);
     });
     try {
