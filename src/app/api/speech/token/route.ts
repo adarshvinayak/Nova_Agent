@@ -1,7 +1,7 @@
 import { actor } from '@/lib/auth';
 import { config } from '@/lib/config';
 import { actorTransaction } from '@/lib/db';
-import { AppError } from '@/lib/errors';
+import { AppError, ProviderError } from '@/lib/errors';
 import { api, mutationGuard, rateLimit } from '@/lib/http';
 import { issueSpeechToken } from '@/lib/providers';
 
@@ -17,9 +17,18 @@ export async function POST(request: Request) {
     });
     try {
       return { speechSessionId, ...await issueSpeechToken() };
-    } catch {
+    } catch (error) {
       await actorTransaction(worker, db => db.query("UPDATE public.va_speech_sessions SET status='failed',ended_at=now() WHERE id=$1 AND worker_id=$2 AND workspace_id=$3 AND status='issued'", [speechSessionId, worker.id, worker.workspaceId]));
-      throw new AppError('SPEECH_UNAVAILABLE', 'Transcription is unavailable. You can type your capture and try the microphone later.', 503);
+      const code = error instanceof ProviderError ? error.code : 'SPEECH_UNAVAILABLE';
+      const messages: Record<string, string> = {
+        SPEECH_CREDENTIAL_INVALID: 'The voice service key is invalid. Ask your administrator to update the Deepgram key.',
+        SPEECH_GRANT_PERMISSION_REQUIRED: 'The Deepgram key needs Member or Admin permissions to create temporary voice tokens. Ask your administrator to update it.',
+        SPEECH_ACCOUNT_CREDIT_REQUIRED: 'The voice service account needs credits. Ask your administrator to check Deepgram billing.',
+        SPEECH_RATE_LIMIT: 'The voice service is busy. Wait a moment and tap the microphone again.',
+        PROVIDER_UNREACHABLE: 'The voice service could not be reached. Please try the microphone again shortly.',
+      };
+      console.error(JSON.stringify({ service: 'speech', code }));
+      throw new AppError(code, messages[code] ?? 'Voice is temporarily unavailable. Please try the microphone again shortly.', 503);
     }
   });
 }

@@ -21,3 +21,11 @@ Playwright's browser download was blocked by network policy. Browser scenarios u
 The updated production build and TypeScript checks passed. The running production process uses the saved Groq and Deepgram configuration and the local PostgreSQL database, with pilot user/admin login enabled. Supabase Auth, Groq and Deepgram live readiness probes each failed with EAI_AGAIN DNS/network errors. Remote Supabase migrations and actual provider functionality are therefore unverified. External calendar OAuth/application or CalDAV credentials are not configured. This is a local operational dashboard with blocked live-provider verification, not a fully verified deployed service.
 
 Credentials supplied in chat were saved only to ignored .env.local. No actual credentials were added to documentation or source control. The remote Supabase connection is saved separately as SUPABASE_DATABASE_URL; DATABASE_URL remains local until connectivity and a controlled migration are possible.
+
+## Mobile voice interface — 8 October 2026
+
+The start page now supports microphone-first requests, voice or text follow-up, inline detail editing, explicit booking confirmation, browser spoken replies with mute, and logout. The dashboard opens separately for tasks and workspace records. The platform uses a slate/navy theme, mobile safe areas, 16px inputs, and reduced-motion support.
+
+Validation: 72 unit/database tests passed; eight browser scenarios passed using simulated speech/language responses with real local PostgreSQL. Voice browser coverage includes streaming submission and confirmation on the start page, denied microphone permission, and secure-upload fallback. The upload recovery case additionally confirms that failed submission retains the transcript and retries with the same capture identifier and original voice source. Fifteen page/viewport checks covered agent, tasks, calendar, audit, and settings at 320px, 390px, and 1440px without horizontal overflow or browser errors. Production build passed.
+
+Live Deepgram access could not be established from this execution environment. The browser tests validate application behavior with simulated provider transport; actual Safari/Chrome microphone codecs, device speech output, provider credentials, and the deployed Vercel site still need live-device acceptance testing. No new environment variables are required.

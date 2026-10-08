@@ -22,7 +22,7 @@ Implementation baseline: 7 October 2026. User decisions supersede the original s
 | Language provider | Return schema-validated extracted facts, candidate question and usage | Choose calendar IDs, invoke booking or establish calendar truth |
 | Calendar reader | Free/busy and app-owned event readback | Read unrelated event details |
 | Booking service/writer | Consume explicit authorization and insert frozen payload with persisted ID | Update/delete events or generate new IDs during recovery |
-| Speech provider/UI | Issue temporary credential; direct browser audio stream; finalized reviewed text | Expose a master key or automatically submit interim text |
+| Speech provider/UI | Issue temporary credential; direct browser audio stream or bounded in-memory server upload fallback; completed voice text | Expose a master key or automatically submit interim text |
 | Operations | Provision/revoke, reconcile, redact, backup/restore and record usage | Release an unresolved booking merely because time elapsed |
 
 Keep these as modules of one Next.js application. Provider code and privileged repositories are server-only. Avoid microservices, a general-purpose agent tool executor and an always-on audio backend.

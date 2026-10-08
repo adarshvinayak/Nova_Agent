@@ -43,7 +43,7 @@ export async function processSession(actor:Actor,id:string,extract=true) {
      connection=await connectionFor(actor);const provider=await getCalendarProvider(actor);
      const busy=[...await provider.queryBusy(connection.calendar_id,valid.snapshot.start,valid.snapshot.end),...await localBusy(connection.calendar_id,valid.snapshot)];
      const clash=busy.find(b=>overlaps({start:valid.snapshot!.start,end:valid.snapshot!.end},b));
-     if(clash) reply=busyMessage(clash);else {ready=valid.snapshot;reply='Everything is ready. Review the details below, then tap Confirm booking when you are happy with them.';}
+     if(clash) reply=busyMessage(clash);else {ready=valid.snapshot;reply='Everything is ready. Review the details below, then tap Confirm appointment when you are happy with them.';}
    }
    await actorTransaction(actor,async db=>{
      const current=await ownedSession(db,actor,id,true);
