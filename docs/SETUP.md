@@ -38,7 +38,7 @@ The actual supported variable names are in `.env.example`; do not add `NEXT_PUBL
 | `NEXT_PUBLIC_SUPABASE_URL` | Project URL; public configuration |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Public browser key, safe only with correct RLS and grants |
 | `SUPABASE_SERVICE_ROLE_KEY` | Server-only service credential, bypasses RLS |
-| `GROQ_API_KEY` / `GROQ_MODEL` | Server API key; recommended initial model `openai/gpt-oss-20b` |
+| `GROQ_API_KEY` / `GROQ_MODEL` | Server API key; recommended initial model `llama-3.1-8b-instant` |
 | `DEEPGRAM_API_KEY` / `DEEPGRAM_MODEL` | Server credential able to issue tokens; initial model `nova-3` |
 | `DEEPGRAM_ENDPOINT` | Approved WebSocket origin/path, default `wss://api.deepgram.com/v1/listen` |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | OAuth web-client configuration, secret server-only |

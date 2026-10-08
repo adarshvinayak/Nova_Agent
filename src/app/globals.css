@@ -525,3 +525,20 @@ label input, label select { margin-top: 6px; }
 .end-mode-toggle input:checked { background: var(--accent); border-color: var(--accent); }
 .end-mode-toggle input:checked::before { transform: translateX(12px); }
 .end-mode-toggle input:disabled { opacity: .55; cursor: not-allowed; }
+
+/* Compact, accessible voice-first start page. */
+.sr-only { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0,0,0,0) !important; white-space: nowrap !important; border: 0 !important; }
+.agent-empty { min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 24px; }
+.agent-empty-symbol { display: grid; place-items: center; width: 100px; height: 100px; border-radius: 32px; color: var(--accent); background: #eef2f7; }
+.agent-empty .agent-suggestions { display: flex; gap: 10px; }
+.agent-empty .agent-suggestions button { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; }
+.agent-header .agent-status { margin: 0; color: var(--muted); }
+.agent-header > .icon-button { margin-left: auto; }
+.agent-end-mode { justify-content: flex-end; margin: 0 0 5px; }
+.end-mode-toggle { min-height: 44px; padding: 0 4px; }
+.agent-dock .agent-controls { display: flex; justify-content: center; }
+.agent-dock .agent-controls button { min-width: 44px; min-height: 44px; }
+.agent-dock .agent-input-row .primary { min-width: 44px; width: 44px; }
+.status-wave { animation: status-wave 1s ease-in-out infinite; }
+@keyframes status-wave { 50% { opacity: .5; transform: scaleY(.65); } }
+@media (prefers-reduced-motion: reduce) { .status-wave { animation: none; } }

@@ -1,5 +1,5 @@
 import {test,expect,type Page} from '@playwright/test';
-async function signIn(page:Page){await page.goto('/');await page.getByLabel('Your name',{exact:true}).fill('Conversation tester');await page.getByRole('button',{name:'Open workspace',exact:true}).click();await expect(page.getByRole('heading',{name:'How can I help?',exact:true})).toBeVisible();}
+async function signIn(page:Page){await page.goto('/');await page.getByLabel('Your name',{exact:true}).fill('Conversation tester');await page.getByRole('button',{name:'Open workspace',exact:true}).click();await expect(page.getByRole('button',{name:'Tap to speak',exact:true})).toBeVisible();}
 async function streaming(page:Page,transcript:string){
  await page.route('**/api/speech/token',route=>route.fulfill({json:{speechSessionId:'30000000-0000-4000-8000-000000000001',accessToken:'temporary-test-token',webSocketUrl:'wss://api.deepgram.com/v1/listen'}}));
  await page.route('**/api/speech/finish',route=>route.fulfill({json:{ok:true}}));

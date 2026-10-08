@@ -7,7 +7,7 @@ export function productionEnvironment(input:Record<string,string|undefined>):Rec
  const url=new URL(database);
  if(!['postgres:','postgresql:'].includes(url.protocol)||!url.hostname.endsWith('.supabase.co')&& !url.hostname.endsWith('.supabase.com')||!url.password)throw new Error('Production requires an authenticated Supabase PostgreSQL connection.');
  url.searchParams.set('sslmode','verify-full');
- const values:Record<string,string>={APP_MODE:'live',PILOT_LOGIN:'true',LANGUAGE_PROVIDER:'groq',SPEECH_PROVIDER:'deepgram',WORKSPACE_TIME_ZONE:'Asia/Dubai',DATABASE_URL:url.toString(),GROQ_MODEL:input.GROQ_MODEL??'openai/gpt-oss-20b',DEEPGRAM_MODEL:input.DEEPGRAM_MODEL??'nova-3',DEEPGRAM_ENDPOINT:'wss://api.deepgram.com/v1/listen'};
+ const values:Record<string,string>={APP_MODE:'live',PILOT_LOGIN:'true',LANGUAGE_PROVIDER:'groq',SPEECH_PROVIDER:'deepgram',WORKSPACE_TIME_ZONE:'Asia/Dubai',DATABASE_URL:url.toString(),GROQ_MODEL:input.GROQ_MODEL??'llama-3.1-8b-instant',DEEPGRAM_MODEL:input.DEEPGRAM_MODEL??'nova-3',DEEPGRAM_ENDPOINT:'wss://api.deepgram.com/v1/listen'};
  for(const name of ['NEXT_PUBLIC_SUPABASE_URL','NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY','GROQ_API_KEY','DEEPGRAM_API_KEY','SESSION_SECRET','TOKEN_ENCRYPTION_KEY','OWNER_SETUP_SECRET']){
   if(!input[name])throw new Error(`Missing production setting: ${name}`);
   values[name]=input[name]!;

@@ -94,6 +94,33 @@ describe('language providers', () => {
     fetchMock.mockResolvedValueOnce(reply({ id: 'request', choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ ...emptyFacts(), durationMinutes: -1 }) } }] }));
     await expect(provider.extract('hello', emptyFacts(), '2026-10-07T00:00:00Z')).rejects.toMatchObject({ code: 'LANGUAGE_INVALID_FACTS' });
   });
+  it('defaults to the smaller model using JSON mode without reasoning parameters', async () => {
+    vi.stubEnv('GROQ_MODEL', '');
+    const previous = { ...emptyFacts(), intent: 'appointment' as const, title: 'Inspection', date: '2026-10-09', time: '10:00', durationMinutes: 30 };
+    const facts = { ...previous, locationNotApplicable: true };
+    fetchMock.mockResolvedValueOnce(reply({ id: 'request', choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(facts) } }] }));
+    await expect(new GroqLanguageProvider().extract('Not applicable', previous, '2026-10-08T00:00:00Z')).resolves.toMatchObject({ facts });
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.model).toBe('llama-3.1-8b-instant');
+    expect(body.response_format).toEqual({ type: 'json_object' });
+    expect(body.temperature).toBe(0);
+    expect(body).not.toHaveProperty('reasoning_effort');
+    expect(body).not.toHaveProperty('tools');
+    expect(body.messages[0].content).toContain('"additionalProperties":false');
+    expect(body.messages[0].content).toContain('"required"');
+    expect(JSON.parse(body.messages[1].content).previous).toEqual(previous);
+  });
+  it.each([
+    ['malformed JSON', '{', 'stop', 'LANGUAGE_INVALID_FACTS'],
+    ['missing fields', '{}', 'stop', 'LANGUAGE_INVALID_FACTS'],
+    ['extra action', JSON.stringify({ ...emptyFacts(), book: true }), 'stop', 'LANGUAGE_INVALID_FACTS'],
+    ['invalid duration', JSON.stringify({ ...emptyFacts(), durationMinutes: -1 }), 'stop', 'LANGUAGE_INVALID_FACTS'],
+    ['truncated output', JSON.stringify(emptyFacts()), 'length', 'LANGUAGE_INCOMPLETE'],
+  ])('rejects %s from the smaller model', async (_label, content, finish_reason, code) => {
+    vi.stubEnv('GROQ_MODEL', 'llama-3.1-8b-instant');
+    fetchMock.mockResolvedValueOnce(reply({ id: 'request', choices: [{ finish_reason, message: { content } }] }));
+    await expect(new GroqLanguageProvider().extract('book inspection', emptyFacts(), '2026-10-08T00:00:00Z')).rejects.toMatchObject({ code });
+  });
   it('extracts demonstrative text and targeted followups without a live model', async () => {
     const provider = new SimulatedLanguageProvider();
     const first = await provider.extract('Book site inspection tomorrow at 10:00 for 30 minutes at Warehouse 2', emptyFacts(), '2026-10-07T10:00:00Z');

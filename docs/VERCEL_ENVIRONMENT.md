@@ -23,7 +23,7 @@ Recommended explicit model configuration (the application has these defaults):
 
 | Variable | Value |
 | --- | --- |
-| `GROQ_MODEL` | `openai/gpt-oss-20b` |
+| `GROQ_MODEL` | `llama-3.1-8b-instant` |
 | `DEEPGRAM_MODEL` | `nova-3` |
 | `DEEPGRAM_ENDPOINT` | `wss://api.deepgram.com/v1/listen` |
 
