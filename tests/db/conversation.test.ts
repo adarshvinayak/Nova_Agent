@@ -31,6 +31,8 @@ it('anchors extraction to persisted input time and preserves extracted facts whe
  mocks.extract.mockResolvedValue({facts,usage:{requestId:randomUUID(),inputTokens:null,outputTokens:null}});
  mocks.queryBusy.mockRejectedValue(new ProviderError('CALENDAR_UNAVAILABLE'));
  await processSession(actor,saved.id);
+ const failure=(await admin.query("SELECT detail FROM private.va_operation_events WHERE subject_id=$1 AND event_type='conversation.processing_failed'",[saved.id])).rows[0];
+ expect(failure.detail.errorCode).toBe('CALENDAR_UNAVAILABLE');expect(failure.detail.processingMsBeforeCommit).toBeGreaterThanOrEqual(0);
  expect(mocks.extract.mock.calls[0][2]).toBe(anchor);
  const failed=await sessionView(actor,saved.id);expect(failed.state).toBe('failed');expect(failed.facts).toEqual(facts);
  mocks.queryBusy.mockResolvedValue([]);

@@ -18,8 +18,10 @@ export async function POST(request: Request) {
     try {
       return { speechSessionId, ...await issueSpeechToken() };
     } catch (error) {
-      await actorTransaction(worker, db => db.query("UPDATE public.va_speech_sessions SET status='failed',ended_at=now() WHERE id=$1 AND worker_id=$2 AND workspace_id=$3 AND status='issued'", [speechSessionId, worker.id, worker.workspaceId]));
       const code = error instanceof ProviderError ? error.code : 'SPEECH_UNAVAILABLE';
+      await actorTransaction(worker, db => db.query(`WITH failed AS (UPDATE public.va_speech_sessions SET status='failed',ended_at=now() WHERE id=$1 AND worker_id=$2 AND workspace_id=$3 AND status='issued' RETURNING id)
+        INSERT INTO private.va_operation_events(workspace_id,actor_worker_id,subject_id,event_type,detail)
+        SELECT $3,$2,id,'speech.provider_failure',$4::jsonb FROM failed`, [speechSessionId,worker.id,worker.workspaceId,{userCode:worker.userCode,alias:worker.displayName,errorCode:code,operation:'token'}]));
       const messages: Record<string, string> = {
         SPEECH_CREDENTIAL_INVALID: 'The voice service key is invalid. Ask your administrator to update the Deepgram key.',
         SPEECH_GRANT_PERMISSION_REQUIRED: 'The Deepgram key needs Member or Admin permissions to create temporary voice tokens. Ask your administrator to update it.',

@@ -21,6 +21,7 @@ export async function localBusy(calendarId:string,snapshot:EventSnapshot,exclude
  return rows.map(r=>({start:r.starts_at.toISOString(),end:r.ends_at.toISOString()}));
 }
 export async function processSession(actor:Actor,id:string,extract=true) {
+ const processingStarted=performance.now();
  const token=randomUUID();
  const claimed=await actorTransaction(actor,async db=>{
    const s=await ownedSession(db,actor,id,true);
@@ -41,7 +42,10 @@ export async function processSession(actor:Actor,id:string,extract=true) {
    const valid=validateSchedule(facts);let reply=valid.question;let ready:EventSnapshot|null=null;let connection:Awaited<ReturnType<typeof connectionFor>>|null=null;
    if(valid.snapshot) {
      connection=await connectionFor(actor);const provider=await getCalendarProvider(actor);
-     const busy=[...await provider.queryBusy(connection.calendar_id,valid.snapshot.start,valid.snapshot.end),...await localBusy(connection.calendar_id,valid.snapshot)];
+     const [providerBusy,reservations]=await Promise.all([
+       provider.queryBusy(connection.calendar_id,valid.snapshot.start,valid.snapshot.end),localBusy(connection.calendar_id,valid.snapshot),
+     ]);
+     const busy=[...providerBusy,...reservations];
      const clash=busy.find(b=>overlaps({start:valid.snapshot!.start,end:valid.snapshot!.end},b));
      if(clash) reply=busyMessage(clash);else {ready=valid.snapshot;reply='Everything is ready. Review the details below, then tap Confirm appointment when you are happy with them.';}
    }
@@ -67,14 +71,16 @@ export async function processSession(actor:Actor,id:string,extract=true) {
          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,now()+interval '5 minutes')`,[actor.workspaceId,actor.id,id,version,nextVersion,connection.config_version,connection.calendar_id,JSON.stringify(ready),snapshotHash,ready.start,ready.end,ready.timeZone]);
      }
      await appendTurn(db,actor,id,'assistant',reply??'Add a little more detail to continue.');
-     await db.query(`UPDATE public.va_sessions SET facts=$2,state=$3,version=$4,processing_token=NULL,processing_until=NULL,updated_at=now() WHERE id=$1`,[id,JSON.stringify(facts),state,nextVersion]);
+     await db.query(`WITH updated AS (UPDATE public.va_sessions SET facts=$2,state=$3,version=$4,processing_token=NULL,processing_until=NULL,updated_at=now() WHERE id=$1 RETURNING id)
+       INSERT INTO private.va_operation_events(workspace_id,actor_worker_id,subject_id,event_type,detail) SELECT $5,$6,id,'conversation.processed',$7::jsonb FROM updated`,[id,JSON.stringify(facts),state,nextVersion,actor.workspaceId,actor.id,{userCode:actor.userCode??'worker',alias:actor.displayName,sessionId:id,status:state,processingMsBeforeCommit:Math.round(performance.now()-processingStarted)}]);
    });
  } catch(error) {
    await actorTransaction(actor,async db=>{
      const s=await ownedSession(db,actor,id,true);if(s.processing_token!==token||s.version!==claimed.version) return;
      const message=error instanceof ProviderError&&error.code.startsWith('CALENDAR')?'Calendar access or availability could not be verified. Your request is saved. Retry, edit the details, or save it as a note.':'The assistant could not finish this request. Your words are saved. Retry or enter the details using Edit.';
      await appendTurn(db,actor,id,'assistant',message);
-     await db.query("UPDATE public.va_sessions SET facts=$2,state='failed',version=version+1,processing_token=NULL,processing_until=NULL,updated_at=now() WHERE id=$1",[id,JSON.stringify(facts)]);
+     await db.query(`WITH updated AS (UPDATE public.va_sessions SET facts=$2,state='failed',version=version+1,processing_token=NULL,processing_until=NULL,updated_at=now() WHERE id=$1 RETURNING id)
+     INSERT INTO private.va_operation_events(workspace_id,actor_worker_id,subject_id,event_type,detail) SELECT $3,$4,id,'conversation.processing_failed',$5::jsonb FROM updated`,[id,JSON.stringify(facts),actor.workspaceId,actor.id,{userCode:actor.userCode??'worker',alias:actor.displayName,sessionId:id,errorCode:error instanceof ProviderError?error.code:'PROCESSING_FAILED',processingMsBeforeCommit:Math.round(performance.now()-processingStarted)}]);
    });
  }
 }

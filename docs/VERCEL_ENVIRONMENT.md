@@ -56,3 +56,9 @@ Check the failed deployment's environment. Production variables are not availabl
 The Node.js engine is pinned to `24.x`. The esbuild install-script notice is unrelated to this missing-variable failure.
 
 Never replace `TOKEN_ENCRYPTION_KEY` after storing calendar connector credentials without a re-encryption migration. Pilot setup is idempotent and preserves revoked permissions, disabled users and pending internal bookings across redeployments.
+
+### Function placement and latency
+
+The Supabase region was confirmed as `ap-northeast1` (Tokyo). `vercel.json` now places functions in `hnd1` (Tokyo). Deploy the new commit to apply placement. No additional environment variable is required. Conversation reads use one SQL snapshot, authorization and audit identity share a query, independent availability reads run concurrently, and idle database connections remain available for 60 seconds. Initial pilot authentication is included in the page response; login uses its returned actor and dashboard code loads separately.
+
+API responses include a `Server-Timing: app;dur=...` header for application time. This excludes Vercel startup, network transit and browser rendering; it is a diagnostic aid, not an end-to-end latency guarantee. Live timing requests to `novaassist-six.vercel.app` were blocked by the execution environment proxy before reaching Vercel. Recheck the deployed site and microphone on a real phone after deployment. Live captions require a Deepgram key that can mint temporary browser tokens; upload fallback works with transcription-only keys but returns text after recording.

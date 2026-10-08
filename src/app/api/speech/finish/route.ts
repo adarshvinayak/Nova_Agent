@@ -5,7 +5,7 @@ import { AppError } from '@/lib/errors';
 import { api, jsonBody, mutationGuard, rateLimit } from '@/lib/http';
 
 const inputSchema = z.object({ speechSessionId: z.uuid(), durationSeconds: z.number().finite().min(0).max(120),
-  status: z.enum(['finished', 'failed', 'abandoned']), providerRequestId: z.string().max(128).regex(/^[a-zA-Z0-9_-]+$/).optional() }).strict();
+  status: z.enum(['finished', 'failed', 'abandoned']), transcript:z.string().max(8000).optional(), failureReason:z.string().max(500).optional(), endMode:z.enum(['manual','auto']).optional(), endReason:z.enum(['manual','pause','limit','error','abandoned']).optional(), captureMode:z.enum(['stream','upload']).optional(), providerRequestId: z.string().max(128).regex(/^[a-zA-Z0-9_-]+$/).optional() }).strict();
 
 export async function POST(request: Request) {
   return api(async () => {
@@ -22,6 +22,10 @@ export async function POST(request: Request) {
       await db.query(`INSERT INTO public.va_usage_events(workspace_id,worker_id,speech_session_id,provider,provider_request_id,operation,audio_seconds,cost_status)
         VALUES($1,$2,$3,'deepgram',$4,'browser_duration_estimate',$5,'unknown') ON CONFLICT DO NOTHING`,
       [worker.workspaceId, worker.id, input.speechSessionId, `client-estimate:${input.speechSessionId}`, input.durationSeconds]);
+      await db.query(`INSERT INTO private.va_operation_events(workspace_id,actor_worker_id,subject_id,event_type,detail,content)
+        VALUES($1,$2,$3,'speech.completed',$4,$5)`,[worker.workspaceId,worker.id,input.speechSessionId,
+        {userCode:worker.userCode??'worker',alias:worker.displayName,source:'browser_voice',status:input.status,endMode:input.endMode,endReason:input.endReason,captureMode:input.captureMode,failureReason:input.failureReason,durationSeconds:input.durationSeconds,clientReported:true},
+        input.transcript?{text:input.transcript}:{}]);
       return { status: input.status };
     });
   });

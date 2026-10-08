@@ -48,13 +48,13 @@ export async function capture(actor:Actor,input:{text:string;source:string;clien
     return {id,process:true};
   });
 }
-export async function submitTurn(actor:Actor,id:string,input:{text:string;expectedVersion:number;clientTurnId:string}) {
+export async function submitTurn(actor:Actor,id:string,input:{text:string;source?:'typed'|'browser_voice';expectedVersion:number;clientTurnId:string}) {
   return actorTransaction(actor,async db=>{
-    const old=await idempotent(db,actor,'turn',input.clientTurnId,{id,text:input.text,version:input.expectedVersion});
+    const old=await idempotent(db,actor,'turn',input.clientTurnId,{id,text:input.text,source:input.source??'typed',version:input.expectedVersion});
     if(old) return {id,process:false};
     const session=await ownedSession(db,actor,id,true);requireEditable(session,input.expectedVersion);
     await db.query("UPDATE public.va_proposals SET status='superseded' WHERE session_id=$1 AND status='ready'",[id]);
-    await appendTurn(db,actor,id,'user',input.text,input.clientTurnId,'typed');
+    await appendTurn(db,actor,id,'user',input.text,input.clientTurnId,input.source??'typed');
     await db.query("UPDATE public.va_sessions SET state='captured',version=version+1,processing_token=NULL,processing_until=NULL,updated_at=now() WHERE id=$1",[id]);
     await finishKey(db,actor,'turn',input.clientTurnId,id);
     return {id,process:true};
@@ -91,13 +91,20 @@ export async function saveNote(actor:Actor,id:string,input:{expectedVersion:numb
 }
 export async function sessionView(actor:Actor,id:string):Promise<SessionView> {
   return workerRead(actor,async db=>{
-    const s=await ownedSession(db,actor,id);
-    const turns=await db.query('SELECT id,speaker,body FROM public.va_turns WHERE session_id=$1 ORDER BY turn_no',[id]);
-    const p=await db.query("SELECT * FROM public.va_proposals WHERE session_id=$1 AND status='ready' ORDER BY version DESC LIMIT 1",[id]);
-    const a=await db.query('SELECT * FROM public.va_attempts WHERE session_id=$1 ORDER BY created_at DESC LIMIT 1',[id]);
+    // One database snapshot keeps the conversation, proposal and attempt consistent,
+    // and avoids four sequential network round trips on every assistant response.
+    const {rows}=await db.query(`SELECT s.*,
+      coalesce((SELECT jsonb_agg(jsonb_build_object('id',t.id,'speaker',t.speaker,'body',t.body) ORDER BY t.turn_no)
+        FROM public.va_turns t WHERE t.session_id=s.id),'[]'::jsonb) AS turns,
+      (SELECT jsonb_build_object('id',p.id,'version',p.version,'snapshot',p.snapshot,'snapshotHash',p.snapshot_hash,'expiresAt',p.expires_at)
+        FROM public.va_proposals p WHERE p.session_id=s.id AND p.status='ready' ORDER BY p.version DESC LIMIT 1) AS proposal,
+      (SELECT jsonb_build_object('id',a.id,'status',a.status,'errorCode',a.error_code)
+        FROM public.va_attempts a WHERE a.session_id=s.id ORDER BY a.created_at DESC LIMIT 1) AS attempt
+      FROM public.va_sessions s WHERE s.id=$1 AND s.worker_id=$2 AND s.workspace_id=$3`,[id,actor.id,actor.workspaceId]);
+    const s=rows[0];
+    if(!s)throw new AppError('NOT_FOUND','This conversation could not be found.',404);
     return {id,state:s.state,version:s.version,facts:{...emptyFacts(),...s.facts},createdAt:s.created_at.toISOString(),contentExpired:!!s.content_redacted_at,
-      turns:turns.rows,proposal:p.rows[0]?{id:p.rows[0].id,version:p.rows[0].version,snapshot:p.rows[0].snapshot,snapshotHash:p.rows[0].snapshot_hash,expiresAt:p.rows[0].expires_at.toISOString()}:null,
-      attempt:a.rows[0]?{id:a.rows[0].id,status:a.rows[0].status,errorCode:a.rows[0].error_code}:null};
+      turns:s.turns,proposal:s.proposal?{...s.proposal,expiresAt:new Date(s.proposal.expiresAt).toISOString()}:null,attempt:s.attempt};
   });
 }
 export async function dashboard(actor:Actor,type:string,cursor?:string):Promise<{items:DashboardItem[];nextCursor:string|null}> {

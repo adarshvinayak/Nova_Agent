@@ -63,3 +63,13 @@ describe('speech API authorization and usage', () => {
     expect(mocks.issue).not.toHaveBeenCalled();
   });
 });
+
+it('records completed utterance and end mode as client-reported audit content', async()=>{
+ mocks.query.mockResolvedValueOnce({rows:[{status:'issued'}],rowCount:1}).mockResolvedValue({rows:[],rowCount:1});
+ const result=await finish(request({speechSessionId:sessionId,durationSeconds:3,status:'finished',transcript:'Book an inspection tomorrow',endMode:'auto',endReason:'pause',captureMode:'stream'}));
+ expect(result.status).toBe(200);
+ const audit=mocks.query.mock.calls.find(call=>call[0].includes("'speech.completed'"));
+ expect(audit?.[1][3]).toMatchObject({clientReported:true,endMode:'auto',endReason:'pause',captureMode:'stream'});
+ expect(audit?.[1][4]).toEqual({text:'Book an inspection tomorrow'});
+ expect(result.headers.get('server-timing')).toMatch(/^app;dur=\d/);
+});

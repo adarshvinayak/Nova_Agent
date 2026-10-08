@@ -32,7 +32,10 @@ describe('voice connection diagnostics', () => {
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ access_token: 'short-lived-only', expires_in: 60 })));
     const result = await issueSpeechToken();
     const url = new URL(result.webSocketUrl!);
-    expect(url.searchParams.get('endpointing')).toBe('300');
+    expect(url.searchParams.get('endpointing')).toBe('1200');
+    expect(url.searchParams.get('utterance_end_ms')).toBe('1200');
+    expect(url.searchParams.get('interim_results')).toBe('true');
+    expect(url.searchParams.get('vad_events')).toBe('true');
     expect(url.searchParams.get('punctuate')).toBe('true');
     expect(url.searchParams.has('sample_rate')).toBe(false);
     expect(url.searchParams.has('encoding')).toBe(false);

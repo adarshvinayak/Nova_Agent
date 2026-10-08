@@ -72,7 +72,10 @@ export async function executeBooking(actor:Actor,id:string,provided?:CalendarPro
    if(row.expires_at.getTime()<=Date.now()) {await markFailure(actor,row,'failed','EXPIRED_PROPOSAL','reserved',row.recovery_generation);return row.session_id;}
    const connection=await connectionFor(actor);if(connection.calendar_id!==row.calendar_id||connection.config_version!==row.config_version) throw new ProviderError('CALENDAR_CHANGED');
    const provider=provided??await getCalendarProvider(actor);
-   const busy=[...await provider.queryBusy(row.calendar_id,row.snapshot.start,row.snapshot.end),...await localBusy(row.calendar_id,row.snapshot,row.id)];
+   const [providerBusy,reservations]=await Promise.all([
+     provider.queryBusy(row.calendar_id,row.snapshot.start,row.snapshot.end),localBusy(row.calendar_id,row.snapshot,row.id),
+   ]);
+   const busy=[...providerBusy,...reservations];
    if(busy.some(b=>overlaps({start:row.snapshot.start,end:row.snapshot.end},b))) {await markFailure(actor,row,'blocked','BUSY','reserved',row.recovery_generation);return row.session_id;}
    dispatched=await actorTransaction(actor,async db=>{
      await ownedSession(db,actor,row.session_id,true);

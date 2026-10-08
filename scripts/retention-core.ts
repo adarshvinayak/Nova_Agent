@@ -15,7 +15,9 @@ export async function applyRetention(db: PoolClient, now = new Date()) {
   async function execute(name: string, sql: string, values: unknown[] = [now]) {
     counts[name] = (await db.query(sql, values)).rowCount ?? 0;
   }
-  await execute('expiredProposals', `UPDATE public.va_proposals SET status='expired' WHERE session_id IN(SELECT id FROM va_retention_sessions) AND status='ready'`, []);
+  // Expire and redact in one mutation so the audit trigger cannot copy expired
+  // appointment text into a fresh operational event during maintenance.
+  await execute('expiredProposals', `UPDATE public.va_proposals SET status='expired',snapshot='{}',content_redacted_at=$1 WHERE session_id IN(SELECT id FROM va_retention_sessions) AND status='ready'`);
   await execute('redactedTurns', `UPDATE public.va_turns SET body=NULL,content_redacted_at=$1 WHERE session_id IN(SELECT id FROM va_retention_sessions) AND content_redacted_at IS NULL`);
   await execute('redactedRecords', `UPDATE public.va_records SET title=NULL,body=NULL,location=NULL,content_redacted_at=$1 WHERE session_id IN(SELECT id FROM va_retention_sessions) AND content_redacted_at IS NULL`);
   await execute('redactedProposals', `UPDATE public.va_proposals SET snapshot='{}',content_redacted_at=$1 WHERE session_id IN(SELECT id FROM va_retention_sessions) AND content_redacted_at IS NULL`);
@@ -26,6 +28,10 @@ export async function applyRetention(db: PoolClient, now = new Date()) {
   await execute('abandonedSpeech', `UPDATE public.va_speech_sessions SET status='abandoned',ended_at=$1 WHERE status IN('issued','streaming') AND started_at < $1::timestamptz - interval '1 hour'`);
   await execute('deletedUsage', `DELETE FROM public.va_usage_events WHERE created_at < $1::timestamptz - interval '90 days'`);
   await execute('deletedSpeech', `DELETE FROM public.va_speech_sessions s WHERE s.ended_at < $1::timestamptz - interval '90 days' AND s.status IN('finished','failed','abandoned') AND NOT EXISTS(SELECT 1 FROM public.va_usage_events u WHERE u.speech_session_id=s.id)`);
+  // Audit text has the same 30-day lifecycle as conversation content, including records
+  // retained as operational metadata for pending or future appointments.
+  await execute('redactedAuditContent', `UPDATE private.va_operation_events SET content='{}',content_redacted_at=$1
+    WHERE created_at < $1::timestamptz - interval '30 days' AND content<>'{}'::jsonb AND content_redacted_at IS NULL`);
   await execute('deletedOperationalLogs', `DELETE FROM private.va_operation_events o WHERE o.created_at < $1::timestamptz - interval '90 days'
     AND NOT EXISTS(SELECT 1 FROM public.va_attempts a WHERE (o.subject_id=a.id OR o.subject_id=a.session_id OR o.subject_id=a.proposal_id)
       AND (a.status IN('reserved','writing','unknown') OR a.ends_at >= $1::timestamptz - interval '90 days'))`);

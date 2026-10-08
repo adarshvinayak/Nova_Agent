@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { actor } from '@/lib/auth';
 import { config } from '@/lib/config';
 import { actorTransaction } from '@/lib/db';
-import { AppError } from '@/lib/errors';
+import { AppError, ProviderError } from '@/lib/errors';
 import { api, rateLimit } from '@/lib/http';
 import { transcribeSpeechAudio } from '@/lib/providers/speech';
 
@@ -43,8 +43,11 @@ export async function POST(request: Request) {
     try {
       // Audio exists only in request memory; neither the application nor database stores it.
       return await transcribeSpeechAudio(new Uint8Array(await audio.arrayBuffer()), audio.type);
-    } catch {
-      await actorTransaction(worker, db => db.query("UPDATE public.va_speech_sessions SET status='failed',ended_at=now() WHERE id=$1 AND worker_id=$2 AND workspace_id=$3 AND status='streaming'", [speechSessionId, worker.id, worker.workspaceId]));
+    } catch(error) {
+      const code=error instanceof ProviderError?error.code:'SPEECH_UNAVAILABLE';
+      await actorTransaction(worker, db => db.query(`WITH failed AS (UPDATE public.va_speech_sessions SET status='failed',ended_at=now() WHERE id=$1 AND worker_id=$2 AND workspace_id=$3 AND status='streaming' RETURNING id)
+        INSERT INTO private.va_operation_events(workspace_id,actor_worker_id,subject_id,event_type,detail)
+        SELECT $3,$2,id,'speech.provider_failure',$4::jsonb FROM failed`,[speechSessionId,worker.id,worker.workspaceId,{userCode:worker.userCode,alias:worker.displayName,errorCode:code,operation:'upload'}]));
       throw new AppError('SPEECH_UNAVAILABLE', 'Your voice message could not be transcribed. Tap the microphone to try again.', 503);
     }
   });

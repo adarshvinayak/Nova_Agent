@@ -4,7 +4,9 @@ import { Pool } from 'pg';
 import { randomUUID } from 'node:crypto';
 import type { Actor } from '../../src/lib/domain';
 import { tasks,saveTask,events,saveEvent,audit,savePermissions } from '../../src/lib/workspace-modules';
-import { pool } from '../../src/lib/db';
+import { applyRetention } from '../../scripts/retention-core';
+import { capture,editFacts,appendTurn } from '../../src/lib/sessions';
+import { actorTransaction,pool } from '../../src/lib/db';
 import { InternalCalendarProvider } from '../../src/lib/providers/internal-calendar';
 const testUrl=process.env.TEST_DATABASE_URL!;
 const admin=new Pool({connectionString:testUrl});const workspace=randomUUID();
@@ -37,6 +39,54 @@ describe('shared workspace modules and permissions',()=>{
   expect((await events(b)).events).toHaveLength(1);const provider=new InternalCalendarProvider(`internal:${workspace}`,workspace);
   expect(await provider.queryBusy(`internal:${workspace}`,input.start,input.end)).toHaveLength(1);
   await expect(provider.readCreated(`internal:${workspace}`,'vc'+randomUUID().replaceAll('-',''))).rejects.toMatchObject({code:'CALENDAR_UNOWNED_EVENT'});
+ });
+ it('records submitted words, replies, source and field changes atomically without internal tokens',async()=>{
+  const {id}=await capture(a,{text:'Book a site inspection',source:'browser_voice',clientCaptureId:randomUUID()});
+  await actorTransaction(a,db=>appendTurn(db,a,id,'assistant','Which day works for you?'));
+  await editFacts(a,id,{facts:{title:'Site inspection',location:'Dubai office'},expectedVersion:1,clientActionId:randomUUID()});
+  const logs=(await audit(a)).logs.filter(row=>row.sessionId===id);
+  expect(logs.find(row=>row.eventType==='conversation.user_message'&&row.content.text==='Book a site inspection')).toMatchObject({userCode:'user1',alias:'Temporary A',detail:{source:'browser_voice'}});
+  expect(logs.find(row=>row.eventType==='conversation.agent_reply')?.content.text).toBe('Which day works for you?');
+  expect(logs.find(row=>row.content.after?.facts?.title==='Site inspection')?.content.before.facts.title).toBeNull();
+  expect(JSON.stringify(logs)).not.toContain('processing_token');
+  await actorTransaction(a,async tx=>{await tx.query("UPDATE va_sessions SET processing_token=gen_random_uuid(),processing_until=now()+interval '1 minute' WHERE id=$1",[id]);});
+  expect((await audit(a)).logs.filter(row=>row.sessionId===id)).toHaveLength(logs.length);
+ });
+ it('captures the exact confirmed snapshot and decision while excluding idempotency keys',async()=>{
+  const {id}=await capture(a,{text:'Confirm inspection',source:'typed',clientCaptureId:randomUUID()});const proposal=randomUUID(),attemptId=randomUUID(),key=randomUUID();
+  const snapshot={title:'Inspection',location:'Dubai',start:'2027-02-01T10:00:00+04:00',end:'2027-02-01T10:30:00+04:00',timeZone:'Asia/Dubai'};
+  await actorTransaction(a,async db=>{
+   await db.query(`INSERT INTO va_proposals(id,workspace_id,worker_id,session_id,version,session_version,config_version,calendar_id,snapshot,snapshot_hash,starts_at,ends_at,expires_at) VALUES($1,$2,$3,$4,1,1,1,'audit-test',$5,$6,$7,$8,now()+interval '5 minutes')`,[proposal,workspace,a.id,id,snapshot,'a'.repeat(64),snapshot.start,snapshot.end]);
+   await db.query(`INSERT INTO va_attempts(id,workspace_id,worker_id,session_id,proposal_id,idempotency_key,intent_hash,calendar_id,event_id,starts_at,ends_at) VALUES($1,$2,$3,$4,$5,$6,$7,'audit-test',$8,$9,$10)`,[attemptId,workspace,a.id,id,proposal,key,'a'.repeat(64),'vc'+attemptId.replaceAll('-',''),snapshot.start,snapshot.end]);
+  });
+  const entry=(await audit(a)).logs.find(row=>row.subjectId===attemptId);
+  expect(entry?.detail.decision).toBe('confirmed');expect(entry?.content.confirmationSnapshot).toEqual(snapshot);expect(JSON.stringify(entry)).not.toContain(key);
+ });
+ it('paginates without overlap and never exposes another worker audit content',async()=>{
+  await actorTransaction(a,async db=>{await db.query(`INSERT INTO private.va_operation_events(workspace_id,actor_worker_id,event_type,detail,content) SELECT $1,$2,'test.action','{}','{"text":"private message"}'::jsonb FROM generate_series(1,60)`,[workspace,a.id]);});
+  const first=await audit(a);expect(first.logs).toHaveLength(50);expect(first.nextCursor).toBeTruthy();const second=await audit(a,first.nextCursor!);
+  expect(second.logs.every(row=>!first.logs.some(prev=>prev.id===row.id))).toBe(true);
+  expect((await audit(b)).logs.every(row=>row.userCode==='user2')).toBe(true);
+  await expect(audit(a,'not-a-cursor')).rejects.toMatchObject({code:'INVALID_INPUT'});
+ });
+ it('redacts audit text after 30 days while keeping metadata and never recreating expired text',async()=>{
+  const oldId=randomUUID();await admin.query(`INSERT INTO private.va_operation_events(id,workspace_id,actor_worker_id,event_type,detail,content,created_at) VALUES($1,$2,$3,'conversation.user_message','{"source":"typed"}','{"text":"sensitive old words"}',now()-interval '31 days')`,[oldId,workspace,a.id]);
+  const db=await admin.connect();try{await db.query('BEGIN');const counts=await applyRetention(db);expect(counts.redactedAuditContent).toBeGreaterThan(0);
+   const row=(await db.query('SELECT content,detail,content_redacted_at FROM private.va_operation_events WHERE id=$1',[oldId])).rows[0];expect(row.content).toEqual({});expect(row.detail.source).toBe('typed');expect(row.content_redacted_at).toBeTruthy();await db.query('ROLLBACK');
+  }finally{db.release();}
+ });
+ it('retention cannot recreate expired proposal text in a new audit record',async()=>{
+  const {id}=await capture(a,{text:'Old proposal for retention',source:'typed',clientCaptureId:randomUUID()});
+  const oldText='Expired confidential appointment';const proposal=randomUUID();
+  await admin.query("UPDATE va_sessions SET updated_at=now()-interval '31 days' WHERE id=$1",[id]);
+  await admin.query(`INSERT INTO va_proposals(id,workspace_id,worker_id,session_id,version,session_version,config_version,calendar_id,snapshot,snapshot_hash,starts_at,ends_at,created_at,expires_at)
+    VALUES($1,$2,$3,$4,1,1,1,'retention-test',$5,$6,'2027-07-01T10:00:00+04:00','2027-07-01T10:30:00+04:00',now()-interval '31 days',now()-interval '30 days')`,[proposal,workspace,a.id,id,{title:oldText},'a'.repeat(64)]);
+  await admin.query("UPDATE private.va_operation_events SET created_at=now()-interval '31 days' WHERE session_id=$1",[id]);
+  const db=await admin.connect();try{await db.query('BEGIN');await applyRetention(db);
+   expect((await db.query('SELECT snapshot,status FROM va_proposals WHERE id=$1',[proposal])).rows[0]).toEqual({snapshot:{},status:'expired'});
+   const logs=(await db.query('SELECT content FROM private.va_operation_events WHERE session_id=$1',[id])).rows;
+   expect(JSON.stringify(logs)).not.toContain(oldText);await db.query('ROLLBACK');
+  }finally{db.release();}
  });
  it('deactivated workers lose all module access',async()=>{
   await savePermissions(owner,{action:'permissions',userCode:'user2',active:false,permissions:{capture:true,tasks:true,calendar:true,audit:true,settings:true}});

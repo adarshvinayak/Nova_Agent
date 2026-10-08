@@ -25,7 +25,7 @@ export async function issueSpeechToken() {
   const token = z.object({ access_token: z.string().min(1), expires_in: z.number().int().positive().max(3600) }).safeParse(await providerJson(response));
   if (!token.success) throw new ProviderError('SPEECH_INVALID_TOKEN');
   endpoint.search = new URLSearchParams({ model: process.env.DEEPGRAM_MODEL || 'nova-3', language: 'en',
-    interim_results: 'true', smart_format: 'true', punctuate: 'true', endpointing: '300', mip_opt_out: 'true' }).toString();
+    interim_results: 'true', smart_format: 'true', punctuate: 'true', endpointing: '1200', utterance_end_ms: '1200', vad_events: 'true', mip_opt_out: 'true' }).toString();
   return { accessToken: token.data.access_token, expiresInSeconds: token.data.expires_in, webSocketUrl: endpoint.toString(), maxDurationSeconds: 120 };
 }
 

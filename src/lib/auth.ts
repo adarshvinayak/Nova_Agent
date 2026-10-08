@@ -53,9 +53,9 @@ export async function pilotSignIn(userCode:string,name:string,code?:string){
   const now=new Intl.DateTimeFormat('en-GB',{month:'2-digit',year:'numeric',timeZone:'Asia/Dubai'}).format(new Date()).split('/');
   if(code!==now.join(''))throw new AppError('INVALID_LOGIN','Check the administrator code.',401);
  }
- const result=await pool().query('SELECT id FROM public.va_workers WHERE user_code=$1 AND active',[userCode]);
+ const result=await pool().query('SELECT * FROM public.va_workers WHERE user_code=$1 AND active',[userCode]);
  if(!result.rows[0])throw new AppError('UNAUTHORIZED','Account is disabled or not configured.',401);
- const worker=await findActor(result.rows[0].id);
+ const row=result.rows[0];const worker:Actor={id:row.id,workspaceId:row.workspace_id,email:row.email,displayName:row.display_name,userCode:row.user_code,role:row.role,permissions:row.permissions};
  const jwt=await new SignJWT({alias:name}).setProtectedHeader({alg:'HS256'}).setSubject(worker.id).setIssuer('voiceagent-pilot').setAudience('voiceagent-web').setIssuedAt().setExpirationTime('8h').sign(new TextEncoder().encode(requiredSecret('SESSION_SECRET')));
  (await cookies()).set('va_pilot_session',jwt,{httpOnly:true,sameSite:'lax',secure:new URL(config().origin).protocol==='https:',path:'/',maxAge:28800});
  return {...worker,displayName:name};

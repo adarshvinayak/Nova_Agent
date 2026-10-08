@@ -18,7 +18,7 @@ test('mobile voice request sends and confirms on the start page',async({page})=>
   class FakeSocket {
    static OPEN=1;static CLOSING=2;readyState=1;
    onopen:(()=>void)|null=null;onmessage:((event:{data:string})=>void)|null=null;onclose:((event:{code:number})=>void)|null=null;
-   constructor(url:string,protocols?:string[]){if(!String(url).startsWith('wss://api.deepgram.com/'))return new OriginalSocket(url,protocols) as unknown as FakeSocket;setTimeout(()=>{this.onopen?.();this.onmessage?.({data:JSON.stringify({type:'Results',is_final:true,start:0,duration:2,channel:{alternatives:[{transcript}]}})});},30);}
+   constructor(url:string,protocols?:string[]){if(!String(url).startsWith('wss://api.deepgram.com/'))return new OriginalSocket(url,protocols) as unknown as FakeSocket;setTimeout(()=>{this.onopen?.();this.onmessage?.({data:JSON.stringify({type:'Results',is_final:false,start:0,duration:2,channel:{alternatives:[{transcript:'I need an appointment'}]}})});setTimeout(()=>this.onmessage?.({data:JSON.stringify({type:'Results',is_final:true,speech_final:true,start:0,duration:2,channel:{alternatives:[{transcript}]}})}),500);},30);}
    send(data:unknown){if(typeof data==='string'&&data.includes('CloseStream'))setTimeout(()=>{this.readyState=3;this.onclose?.({code:1000});},20);}
    close(){this.readyState=3;}
   }
@@ -26,6 +26,9 @@ test('mobile voice request sends and confirms on the start page',async({page})=>
  },{transcript:`Book a mobile visit on ${day} at 10:00 am for 30 minutes at Warehouse Voice.`});
  await page.goto('/');await page.getByLabel('Your name',{exact:true}).fill('Mobile voice tester');await page.getByRole('button',{name:'Open workspace',exact:true}).click();
  await page.getByRole('button',{name:'Tap to speak',exact:true}).click();
+ await expect(page.getByRole('button',{name:'Stop recording and send voice message',exact:true})).toBeEnabled();
+ await expect(page.getByLabel('Live transcription')).toContainText('I need an appointment');
+ await expect(page.getByLabel('Live transcription')).toContainText('Warehouse Voice');
  await expect(page.getByRole('button',{name:'Stop recording and send voice message',exact:true})).toBeEnabled();
  await page.getByRole('button',{name:'Stop recording and send voice message',exact:true}).click();
  await expect(page.getByRole('button',{name:'Confirm appointment',exact:true})).toBeVisible();

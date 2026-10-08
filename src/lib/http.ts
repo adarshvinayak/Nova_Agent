@@ -27,14 +27,15 @@ export async function rateLimit(key: string, max=20) {
   if(rows[0].request_count>max) throw new AppError('RATE_LIMIT','Please wait a minute before trying again.',429);
 }
 export async function api(work:()=>Promise<unknown>, successStatus=200) {
-  const requestId=randomUUID();
-  try { const result=await work(); return NextResponse.json({...result as object,requestId},{status:successStatus,headers:{'Cache-Control':'no-store'}}); }
+  const requestId=randomUUID(),started=performance.now();
+  const headers=()=>({'Cache-Control':'no-store','Server-Timing':`app;dur=${(performance.now()-started).toFixed(1)}`});
+  try { const result=await work(); return NextResponse.json({...result as object,requestId},{status:successStatus,headers:headers()}); }
   catch(error) {
     let e:AppError;
     if(error instanceof AppError) e=error;
     else if(error instanceof ZodError) e=new AppError('INVALID_INPUT','Please check the supplied fields.',422);
     else if((error as {code?:string})?.code==='23P01') e=new AppError('CONFLICT','This time overlaps another pilot booking. Choose a different time.',409);
     else { e=new AppError('UNAVAILABLE','The service could not complete this request. Your saved work is preserved.',503); console.error(JSON.stringify({requestId,code:'UNHANDLED',type:error instanceof Error?error.name:'unknown'})); }
-    return NextResponse.json({error:{code:e.code,message:e.message},requestId},{status:e.status,headers:{'Cache-Control':'no-store'}});
+    return NextResponse.json({error:{code:e.code,message:e.message},requestId},{status:e.status,headers:headers()});
   }
 }
