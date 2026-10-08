@@ -542,3 +542,51 @@ label input, label select { margin-top: 6px; }
 .status-wave { animation: status-wave 1s ease-in-out infinite; }
 @keyframes status-wave { 50% { opacity: .5; transform: scaleY(.65); } }
 @media (prefers-reduced-motion: reduce) { .status-wave { animation: none; } }
+
+/* The primary voice control and keyboard composer exchange space without moving the thread. */
+.agent-dock-inputs { display: grid; grid-template-columns: minmax(56px,1fr) minmax(56px,0fr); align-items: stretch; gap: 8px; transition: grid-template-columns .32s cubic-bezier(.22,.68,0,1); }
+.agent-dock-inputs.input-text { grid-template-columns: minmax(56px,0fr) minmax(56px,1fr); }
+.agent-mic-slot, .agent-keyboard-slot { position: relative; min-width: 0; height: 58px; }
+.agent-dock .agent-mic-slot .speech-capture { width: 100%; max-width: none; height: 58px; margin: 0; }
+.agent-dock .agent-mic-slot .speech-mic { width: 100%; height: 58px; min-height: 58px; border: 1px solid #d0d9e5; border-radius: 16px; background: #f4f6fa; color: #203b60; box-shadow: none; transition: background .2s; }
+.agent-dock .agent-mic-slot .speech-mic.is-listening { background: #203b60; color: white; }
+.agent-dock .input-text .speech-capture { visibility: hidden; pointer-events: none; }
+.keyboard-mode-switch, .mic-mode-switch { position: absolute; inset: 0; width: 100%; height: 58px; display: grid; place-items: center; border: 1px solid #d0d9e5; border-radius: 16px; background: #f4f6fa; color: #203b60; }
+.agent-dock .agent-keyboard-slot .agent-composer { height: 58px; width: 100%; overflow: hidden; transition: opacity .18s, transform .3s; }
+.agent-dock .input-voice .agent-composer { opacity: 0; transform: translateX(18px); pointer-events: none; visibility: hidden; }
+.agent-dock .input-text .agent-composer { opacity: 1; transform: translateX(0); }
+.agent-dock .agent-keyboard-slot .agent-input-row { height: 58px; border: 1px solid #d0d9e5; border-radius: 16px; background: #fff; padding: 5px; gap: 3px; }
+.agent-dock .agent-input-row textarea { min-height: 46px; max-height: 46px; height: 46px; padding: 10px 4px; border: 0; background: transparent; border-radius: 10px; }
+.agent-dock .agent-input-row .primary { height: 46px; min-height: 46px; border-radius: 12px; }
+.agent-header > .new-chat-button { margin-left: auto; }
+.agent-header > .new-chat-button + .icon-button { margin-left: 0; }
+.new-chat-confirm > div { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.agent-review .compact-card { padding: 12px 14px; box-shadow: none; }
+.compact-card-top { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.compact-card-top h2, .confirmation-card .compact-card-top h2 { margin: 0; font-size: 15px; line-height: 1.4; }
+.compact-card-top .icon-button { flex-shrink: 0; }
+.compact-card > p { margin: 4px 0 8px; font-size: 12px; }
+.compact-details { margin: 5px 0 9px; }
+.compact-details > summary { padding: 8px 0; min-height: 40px; cursor: pointer; color: #526580; font-size: 12px; }
+.compact-details > p { margin: 8px 0; }
+.compact-details > dl { margin-top: 10px; }
+.compact-card .primary { min-height: 44px; padding: 10px 12px; }
+@media(prefers-reduced-motion: reduce) { .agent-dock-inputs, .agent-dock .agent-keyboard-slot .agent-composer, .agent-dock .agent-mic-slot .speech-mic { transition: none; } }
+.agenda-chat > h2 { font-size: 15px; margin: 0 0 10px; }
+.agenda-chat ul { list-style: none; margin: 0; padding: 0; }
+.agenda-chat li { display: flex; gap: 10px; align-items: flex-start; padding: 10px 0; border-top: 1px solid var(--line); }
+.agenda-chat li:first-child { border-top: 0; }
+.agenda-item-icon { padding-top: 2px; color: var(--accent); }
+.agenda-chat li div { min-width: 0; }
+.agenda-chat li strong { display: block; font-size: 13px; overflow-wrap: anywhere; }
+.agenda-chat li small { display: block; font-size: 11px; color: var(--muted); margin-top: 3px; }
+.agent-review .compact-outcome { padding: 14px; }
+.compact-card-top h2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+.task-assignment { width: auto; max-width: 140px; min-height: 44px; margin: 0; font-size: 12px; padding: 8px; }
+/* Keep navigation usable on short desktops and clipped labels inside the chat pane. */
+.sidebar > .brand, .sidebar > .workspace-label, .sidebar-bottom { flex-shrink: 0; }
+.sidebar > nav { min-height: 0; overflow-y: auto; }
+.sidebar-bottom .quiet-card { margin: 16px 4px; }
+.agent-page, .agent-thread, .agent-message, .agent-composer { position: relative; }
+.agent-page { overflow: hidden; }

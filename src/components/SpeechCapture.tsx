@@ -156,7 +156,7 @@ export function SpeechCapture({ onTranscript, disabled = false, mode, onRecordin
             }).catch(error => { if (!run.ended) { run.failure = error instanceof Error ? error.message : 'Voice processing failed. Please try again.'; finish(run); } });
         };
         recorder.start(250); run.started = Date.now(); updatePhase('recording');
-        report('Listening. This voice key supports transcription after recording; live words need a Deepgram key with token-grant permission.');
+        report('Listening. Your words will appear when you finish recording.');
         if (endMode === 'auto') startSilenceDetection(run, stream);
         run.maxTimer = setTimeout(() => stop(run,'limit'), 120_000);
         return;

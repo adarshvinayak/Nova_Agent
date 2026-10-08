@@ -42,10 +42,10 @@ test('mobile voice request sends and confirms on the start page',async({page})=>
 test('denied microphone permission shows actionable feedback and retains chat fallback',async({page})=>{
  await page.route('**/api/config',route=>route.fulfill({json:{speechAvailable:true}}));
  await page.addInitScript(()=>{Object.defineProperty(navigator,'mediaDevices',{value:{getUserMedia:async()=>{throw new DOMException('Denied','NotAllowedError');}}});});
- await page.goto('/');await page.getByLabel('Your name',{exact:true}).fill('Permission tester');await page.getByRole('button',{name:'Open workspace',exact:true}).click();
+ await page.goto('/');await page.getByRole('combobox',{name:'User code',exact:true}).selectOption('user2');await page.getByLabel('Your name',{exact:true}).fill('Permission tester');await page.getByRole('button',{name:'Open workspace',exact:true}).click();
  await page.getByRole('button',{name:'Tap to speak',exact:true}).click();
  await expect(page.getByText(/Allow microphone access/)).toBeVisible();
- await expect(page.getByLabel('Prefer to type? Send a message')).toBeEnabled();
+ await page.getByRole('button',{name:'Switch to keyboard input',exact:true}).click();await expect(page.getByLabel('Prefer to type? Send a message')).toBeEnabled();
 });
 
 test('mobile voice works through secure upload when temporary tokens are unavailable',async({page})=>{
@@ -70,9 +70,9 @@ test('mobile voice works through secure upload when temporary tokens are unavail
  await page.goto('/');await page.getByLabel('Your name',{exact:true}).fill('Upload voice tester');await page.getByRole('button',{name:'Open workspace',exact:true}).click();
  await page.getByRole('button',{name:'Tap to speak',exact:true}).click();await page.getByRole('button',{name:'Stop recording and send voice message',exact:true}).click();
  await expect(page.getByRole('alert').filter({hasText:'Temporary request failure'})).toBeVisible();
- await expect(page.getByLabel('Prefer to type? Send a message')).toHaveValue(`Save a note: ${title}`);
+ await page.getByRole('button',{name:'Switch to keyboard input',exact:true}).click();await expect(page.getByLabel('Prefer to type? Send a message')).toHaveValue(`Save a note: ${title}`);
  await page.getByRole('button',{name:'Send message',exact:true}).click();
- await expect(page.getByRole('heading',{name:'Note saved',exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Confirm note',exact:true}).click();await expect(page.getByRole('heading',{name:'Note saved',exact:true})).toBeVisible();
  expect(captures).toHaveLength(2);expect(captures[1].clientCaptureId).toBe(captures[0].clientCaptureId);expect(captures[1].source).toBe('browser_voice');
  await expect(page.getByRole('log',{name:'Conversation'})).toContainText(title);
  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);

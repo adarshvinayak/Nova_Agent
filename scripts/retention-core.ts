@@ -23,7 +23,7 @@ export async function applyRetention(db: PoolClient, now = new Date()) {
   await execute('redactedProposals', `UPDATE public.va_proposals SET snapshot='{}',content_redacted_at=$1 WHERE session_id IN(SELECT id FROM va_retention_sessions) AND content_redacted_at IS NULL`);
   await execute('redactedDemoEvents', `UPDATE private.va_demo_events d SET snapshot=jsonb_build_object('title','Content expired','location',NULL,'start',d.snapshot->'start','end',d.snapshot->'end','timeZone',d.snapshot->'timeZone')
     FROM public.va_attempts a WHERE a.session_id IN(SELECT id FROM va_retention_sessions) AND a.calendar_id=d.calendar_id AND a.event_id=d.event_id`, []);
-  await execute('redactedSessions', `UPDATE public.va_sessions SET facts='{}',content_redacted_at=$1,processing_token=NULL,processing_until=NULL,version=version+1 WHERE id IN(SELECT id FROM va_retention_sessions)`);
+  await execute('redactedSessions', `UPDATE public.va_sessions SET facts='{}',assistant_view=NULL,content_redacted_at=$1,processing_token=NULL,processing_until=NULL,version=version+1 WHERE id IN(SELECT id FROM va_retention_sessions)`);
   // Abandoned speech has no booking authority. Preserve its unknown cost instead of fabricating zero.
   await execute('abandonedSpeech', `UPDATE public.va_speech_sessions SET status='abandoned',ended_at=$1 WHERE status IN('issued','streaming') AND started_at < $1::timestamptz - interval '1 hour'`);
   await execute('deletedUsage', `DELETE FROM public.va_usage_events WHERE created_at < $1::timestamptz - interval '90 days'`);

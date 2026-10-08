@@ -2,9 +2,9 @@ import { DateTime } from 'luxon';
 import type { Facts,EventSnapshot,BusyInterval } from './domain';
 export function validateSchedule(facts:Facts,now=new Date()):{question:string|null;snapshot:EventSnapshot|null} {
   const ask=(question:string)=>({question,snapshot:null});
-  if(facts.intent==='unsupported') return ask('This pilot can create new appointments or save notes. It cannot move or cancel existing events.');
-  if(facts.intent==='unclear') return ask('Would you like to create an appointment or save a note?');
-  if(facts.intent==='note') return {question:null,snapshot:null};
+  if(facts.intent==='unsupported') return ask('I can book appointments, save notes, assign tasks, and check your agenda. Changes to saved calendar events aren’t supported.');
+  if(facts.intent==='unclear') return ask('I can help with appointments, notes, tasks, or your agenda. What would you like?');
+  if(['note','task','agenda'].includes(facts.intent)) return {question:null,snapshot:null};
   if(facts.ambiguities.length) return ask(facts.ambiguities[0]);
   if(!facts.title?.trim()) return ask('What should the appointment be called?');
   if(!facts.date) return ask('What date is the appointment?');

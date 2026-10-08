@@ -3,7 +3,7 @@ import { readFile,readdir } from 'node:fs/promises';
 import { Pool } from 'pg';
 import { randomUUID } from 'node:crypto';
 import type { Actor } from '../../src/lib/domain';
-import { tasks,saveTask,events,saveEvent,audit,savePermissions } from '../../src/lib/workspace-modules';
+import { tasks,saveTask,createTaskInTransaction,resolveTaskDraftInTransaction,events,saveEvent,audit,savePermissions } from '../../src/lib/workspace-modules';
 import { applyRetention } from '../../scripts/retention-core';
 import { capture,editFacts,appendTurn } from '../../src/lib/sessions';
 import { actorTransaction,pool } from '../../src/lib/db';
@@ -87,6 +87,35 @@ describe('shared workspace modules and permissions',()=>{
    const logs=(await db.query('SELECT content FROM private.va_operation_events WHERE session_id=$1',[id])).rows;
    expect(JSON.stringify(logs)).not.toContain(oldText);await db.query('ROLLBACK');
   }finally{db.release();}
+ });
+ it('assigns by stable user code, keeps creator and assignee visibility, and records exact assignment changes',async()=>{
+  await savePermissions(owner,{action:'permissions',userCode:'user2',permissions:{capture:true,tasks:true,calendar:true,audit:true,settings:true}});
+  const task=await saveTask(a,{title:'Check the drawings',assigneeUserCode:'user2',dueAt:'2027-03-01T09:00:00+04:00'});
+  expect((await tasks(b,true)).tasks.find(row=>row.id===task.id)).toMatchObject({creatorUserCode:'user1',assigneeUserCode:'user2'});
+  expect((await tasks(a,true)).tasks.some(row=>row.id===task.id)).toBe(true);
+  await saveTask(b,{id:task.id,title:'Check the drawings',assigneeUserCode:'user1'});
+  const entry=(await audit(b)).logs.find(row=>row.subjectId===task.id);
+  expect(entry?.content.before.assigneeUserCode).toBe('user2');expect(entry?.content.after.assigneeUserCode).toBe('user1');
+  expect((await tasks(b,true)).tasks.some(row=>row.id===task.id)).toBe(false);
+  await expect(saveTask(a,{title:'Invalid',assigneeUserCode:'nobody'})).rejects.toMatchObject({code:'INVALID_ASSIGNEE'});
+  await admin.query("UPDATE va_workers SET active=false WHERE id=$1",[b.id]);
+  await expect(saveTask(a,{title:'Inactive',assigneeUserCode:'user2'})).rejects.toMatchObject({code:'INVALID_ASSIGNEE'});
+  await admin.query("UPDATE va_workers SET active=true WHERE id=$1",[b.id]);
+ });
+ it('sorts incomplete task due dates before undated and completed tasks',async()=>{
+  const late=await saveTask(a,{title:'Later work',dueAt:'2027-06-02T12:00:00+04:00'});
+  const early=await saveTask(a,{title:'Earlier work',dueAt:'2027-06-01T12:00:00+04:00'});
+  const done=await saveTask(a,{title:'Completed work',status:'done',dueAt:'2027-05-01T12:00:00+04:00'});
+  const ids=(await tasks(a)).tasks.map(row=>row.id);expect(ids.indexOf(early.id)).toBeLessThan(ids.indexOf(late.id));expect(ids.indexOf(late.id)).toBeLessThan(ids.indexOf(done.id));
+ });
+ it('resolves task drafts and creates a single task for a retried conversation confirmation',async()=>{
+  const {id}=await capture(a,{text:'Assign user2 to inspect the sensor',source:'typed',clientCaptureId:randomUUID()});
+  const draft=await actorTransaction(a,db=>resolveTaskDraftInTransaction(db,a,{title:'Inspect sensor',assigneeUserCode:'user2'}));expect(draft.assigneeUserCode).toBe('user2');
+  const create=()=>actorTransaction(a,db=>createTaskInTransaction(db,a,{...draft,sourceSessionId:id}));
+  const [first,second]=await Promise.all([create(),create()]);expect(first.id).toBe(second.id);
+  expect((await admin.query('SELECT count(*)::int AS count FROM va_tasks WHERE source_session_id=$1',[id])).rows[0].count).toBe(1);
+  const foreignSession=await capture(b,{text:'Private task',source:'typed',clientCaptureId:randomUUID()});
+  await expect(actorTransaction(a,db=>createTaskInTransaction(db,a,{title:'Cannot use another conversation',sourceSessionId:foreignSession.id}))).rejects.toMatchObject({code:'NOT_FOUND'});
  });
  it('deactivated workers lose all module access',async()=>{
   await savePermissions(owner,{action:'permissions',userCode:'user2',active:false,permissions:{capture:true,tasks:true,calendar:true,audit:true,settings:true}});

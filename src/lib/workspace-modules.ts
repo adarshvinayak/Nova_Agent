@@ -11,10 +11,39 @@ export async function moduleTransaction<T>(actor:Actor,module:ModuleName,work:(d
   return work(db);
  });
 }
-export async function tasks(actor:Actor){return moduleTransaction(actor,'tasks',async db=>({tasks:(await db.query(`SELECT t.id,t.title,t.status,t.worker_id AS "workerId",w.user_code AS "userCode",t.created_at AS "createdAt",t.updated_at AS "updatedAt" FROM public.va_tasks t JOIN public.va_workers w ON w.id=t.worker_id WHERE t.workspace_id=$1 ORDER BY t.created_at DESC LIMIT 200`,[actor.workspaceId])).rows}));}
-const taskInput=z.object({id:z.string().uuid().optional(),title:z.string().trim().min(1).max(300),status:z.enum(['open','todo','in_progress','done']).default('todo').transform(value=>value==='open'?'todo':value)});
+export async function tasks(actor:Actor,assigned=false){return moduleTransaction(actor,'tasks',async db=>({
+ tasks:(await db.query(`SELECT t.id,t.title,t.status,t.worker_id AS "workerId",w.user_code AS "userCode",w.user_code AS "creatorUserCode",a.user_code AS "assigneeUserCode",t.assignee_worker_id AS "assigneeWorkerId",t.due_at AS "dueAt",t.created_at AS "createdAt",t.updated_at AS "updatedAt" FROM public.va_tasks t JOIN public.va_workers w ON w.id=t.worker_id JOIN public.va_workers a ON a.id=t.assignee_worker_id WHERE t.workspace_id=$1 AND (NOT $3::boolean OR t.worker_id=$2 OR t.assignee_worker_id=$2 OR EXISTS(SELECT 1 FROM public.va_workers WHERE id=$2 AND role='admin')) ORDER BY (t.status='done'),t.due_at ASC NULLS LAST,t.created_at ASC,t.id LIMIT 200`,[actor.workspaceId,actor.id,assigned])).rows,
+ users:(await db.query(`SELECT id,user_code AS "userCode" FROM public.va_workers WHERE workspace_id=$1 AND active AND user_code IS NOT NULL AND (role='admin' OR coalesce((permissions->>'tasks')::boolean,true)) ORDER BY user_code`,[actor.workspaceId])).rows
+}));}
+const taskInput=z.object({id:z.string().uuid().optional(),title:z.string().trim().min(1).max(300),status:z.enum(['open','todo','in_progress','done']).default('todo').transform(value=>value==='open'?'todo':value),assigneeUserCode:z.string().trim().min(1).max(32).optional(),dueAt:z.string().datetime({offset:true}).nullable().optional()});
+export type TaskCreation={title:string;assigneeUserCode?:string;dueAt?:string|null;sourceSessionId?:string};
+async function taskAssignee(db:PoolClient,actor:Actor,userCode?:string){
+ const member=(await db.query('SELECT role,permissions FROM public.va_workers WHERE id=$1 AND workspace_id=$2 AND active FOR SHARE',[actor.id,actor.workspaceId])).rows[0];
+ if(!member)throw new AppError('UNAUTHORIZED','Please sign in again.',401);
+ if(member.role!=='admin'&&member.permissions.tasks===false)throw new AppError('FORBIDDEN','You do not have access to tasks.',403);
+ const target=(await db.query(`SELECT id,user_code FROM public.va_workers WHERE workspace_id=$1 AND active AND (($2::text IS NULL AND id=$3) OR user_code=$2) AND (role='admin' OR coalesce((permissions->>'tasks')::boolean,true)) FOR SHARE`,[actor.workspaceId,userCode??null,actor.id])).rows[0];
+ if(!target)throw new AppError('INVALID_ASSIGNEE','Choose an active user with task access.',422);
+ return target;
+}
+/** Resolve an active stable user code before offering a task confirmation. */
+export async function resolveTaskDraftInTransaction(db:PoolClient,actor:Actor,input:TaskCreation){
+ const data=taskInput.parse(input);const target=await taskAssignee(db,actor,data.assigneeUserCode);
+ return {title:data.title,assigneeUserCode:target.user_code as string,dueAt:data.dueAt??null};
+}
+/** Called inside the existing actor transaction; a source session can create only one task. */
+export async function createTaskInTransaction(db:PoolClient,actor:Actor,input:TaskCreation){
+ const data=taskInput.parse(input);const source=input.sourceSessionId?z.uuid().parse(input.sourceSessionId):null;
+ const target=await taskAssignee(db,actor,data.assigneeUserCode);
+ if(source){const session=await db.query('SELECT id FROM public.va_sessions WHERE id=$1 AND workspace_id=$2 AND worker_id=$3 FOR UPDATE',[source,actor.workspaceId,actor.id]);if(!session.rowCount)throw new AppError('NOT_FOUND','Conversation not found.',404);}
+ const result=await db.query(`INSERT INTO public.va_tasks(workspace_id,worker_id,title,status,assignee_worker_id,due_at,source_session_id) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (source_session_id) WHERE source_session_id IS NOT NULL DO NOTHING RETURNING id`,[actor.workspaceId,actor.id,data.title,data.status,target.id,data.dueAt??null,source]);
+ const id=result.rows[0]?.id??(source?(await db.query('SELECT id FROM public.va_tasks WHERE source_session_id=$1 AND workspace_id=$2 AND worker_id=$3',[source,actor.workspaceId,actor.id])).rows[0]?.id:null);
+ if(!id)throw new AppError('CONFLICT','Task creation could not be completed.',409);
+ return {id,assigneeUserCode:target.user_code};
+}
 export async function saveTask(actor:Actor,input:unknown){const data=taskInput.parse(input);return moduleTransaction(actor,'tasks',async db=>{
- const result=data.id?await db.query('UPDATE public.va_tasks SET title=$3,status=$4,updated_at=now() WHERE id=$1 AND workspace_id=$2 RETURNING id',[data.id,actor.workspaceId,data.title,data.status]):await db.query('INSERT INTO public.va_tasks(workspace_id,worker_id,title,status) VALUES($1,$2,$3,$4) RETURNING id',[actor.workspaceId,actor.id,data.title,data.status]);
+ if(!data.id)return createTaskInTransaction(db,actor,data);
+ const target=data.assigneeUserCode?await taskAssignee(db,actor,data.assigneeUserCode):null;
+ const result=await db.query(`UPDATE public.va_tasks SET title=$3,status=$4,assignee_worker_id=coalesce($5,assignee_worker_id),due_at=CASE WHEN $6::boolean THEN $7::timestamptz ELSE due_at END,updated_at=now() WHERE id=$1 AND workspace_id=$2 RETURNING id`,[data.id,actor.workspaceId,data.title,data.status,target?.id??null,data.dueAt!==undefined,data.dueAt??null]);
  if(!result.rowCount)throw new AppError('NOT_FOUND','Task not found.',404);return {id:result.rows[0].id};
 });}
 const timestamp=z.string().datetime({offset:true});
