@@ -4,7 +4,10 @@ import pg from 'pg';
 import dotenv from 'dotenv';
 dotenv.config({ path: '.env.local', quiet: true });
 async function main() {
-  if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required');
+  if (!process.env.DATABASE_URL) {
+    const target = process.env.VERCEL_ENV === 'preview' ? 'Preview' : 'Production';
+    throw new Error(`DATABASE_URL is required. In Vercel Project Settings > Environment Variables, add DATABASE_URL for ${target}, save it, and redeploy. Use the Supabase PostgreSQL session pooler connection string; the Supabase API URL/key cannot replace it.`);
+  }
   const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
   await client.connect();
   try {

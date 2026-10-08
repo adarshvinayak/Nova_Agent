@@ -47,4 +47,12 @@ Do not configure `TEST_DATABASE_URL`, local development database URLs, `VERCEL_T
 
 Preview deployments need separate credentials/database and a separately chosen origin; configure Production first. After deployment, verify login, persistent tasks/calendar, audit isolation, administrator permissions, actual Groq extraction and Deepgram microphone streaming. A successful build alone does not verify provider behavior.
 
+## Troubleshooting `DATABASE_URL is required`
+
+This error means the deployment's build did not receive a nonempty variable named exactly `DATABASE_URL`; it occurs before attempting any database connection. In Vercel, open the project → Settings → Environment Variables, add the session pooler connection string under that exact name, select **Production**, and save. Redeploy afterward: changing variables does not update existing deployments.
+
+Check the failed deployment's environment. Production variables are not available to Preview deployments. Set the project's Production Branch to `main` and deploy that branch to Production, or supply a separate database configuration for Preview. `NEXT_PUBLIC_SUPABASE_URL`, a database password alone, `SUPABASE_DATABASE_URL`, and `VERCEL_DATABASE_URL` do not replace the runtime/build `DATABASE_URL` for GitHub imports.
+
+The Node.js engine is pinned to `24.x`. The esbuild install-script notice is unrelated to this missing-variable failure.
+
 Never replace `TOKEN_ENCRYPTION_KEY` after storing calendar connector credentials without a re-encryption migration. Pilot setup is idempotent and preserves revoked permissions, disabled users and pending internal bookings across redeployments.
