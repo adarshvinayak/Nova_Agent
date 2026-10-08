@@ -1,0 +1,50 @@
+# GitHub → Vercel production setup
+
+Import `adarshvinayak/Nova_Agent`, select the `main` branch, Next.js framework and repository root. Keep the checked-in `vercel.json` build command: `npm run build:vercel`. The build applies Supabase migrations, initializes the stable pilot accounts/internal calendar and builds the app. Install command: `npm ci`. Use Node.js 24.x.
+
+Set the following variables for **Production** before the first deployment. Store credentials and application secrets as sensitive environment variables.
+
+| Variable | Production value |
+| --- | --- |
+| `APP_MODE` | `live` |
+| `PILOT_LOGIN` | `true` |
+| `LANGUAGE_PROVIDER` | `groq` |
+| `SPEECH_PROVIDER` | `deepgram` |
+| `DATABASE_URL` | Supabase session pooler PostgreSQL connection, port 5432, with URL-encoded password and `sslmode=verify-full` |
+| `NEXT_PUBLIC_SUPABASE_URL` | `https://oqlqeexbbzmojnuyxkzi.supabase.co` |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Supabase project publishable key |
+| `GROQ_API_KEY` | Groq API key |
+| `DEEPGRAM_API_KEY` | Deepgram API key with permission to issue temporary access tokens |
+| `SESSION_SECRET` | Independent random 64-character hexadecimal secret |
+| `TOKEN_ENCRYPTION_KEY` | Another independent random 64-character hexadecimal secret |
+| `OWNER_SETUP_SECRET` | Another independent random 64-character hexadecimal secret |
+
+Recommended explicit model configuration (the application has these defaults):
+
+| Variable | Value |
+| --- | --- |
+| `GROQ_MODEL` | `openai/gpt-oss-20b` |
+| `DEEPGRAM_MODEL` | `nova-3` |
+| `DEEPGRAM_ENDPOINT` | `wss://api.deepgram.com/v1/listen` |
+
+`APP_ORIGIN` is optional if Vercel exposes its automatic system variables: the app derives the production HTTPS origin from `VERCEL_PROJECT_PRODUCTION_URL`. For a custom domain, set `APP_ORIGIN=https://your-exact-domain` without a path, and redeploy. Use the canonical production domain for login and mutations. Do not set `APP_ORIGIN` to localhost.
+
+Generate each of the three application secrets independently on your computer, for example run this command three times and paste the outputs directly into Vercel:
+
+```sh
+node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
+```
+
+Get the session pooler connection from **Supabase → Connect**. Its username normally includes the project reference. Example template (replace the entire host/credentials from the dashboard):
+
+```text
+postgresql://postgres.oqlqeexbbzmojnuyxkzi:URL_ENCODED_PASSWORD@SESSION_POOLER_HOST:5432/postgres?sslmode=verify-full
+```
+
+Prefer the session pooler because Supabase's direct database hostname may require IPv6. The migration runner and app both use `DATABASE_URL`. Preserve certificate validation; if the database requires a supplied CA, configure that CA rather than turning TLS verification off.
+
+Do not configure `TEST_DATABASE_URL`, local development database URLs, `VERCEL_TOKEN`, `VERCEL_DATABASE_URL`, or `SUPABASE_DATABASE_URL` in the app. The last two are inputs to the optional CLI configuration helper; GitHub imports use `DATABASE_URL` directly. `SUPABASE_SERVICE_ROLE_KEY` is only needed if you enable the separate Supabase invite-based login workflow. Google OAuth and Shortcut keys are not needed for the current built-in calendar/pilot selector login.
+
+Preview deployments need separate credentials/database and a separately chosen origin; configure Production first. After deployment, verify login, persistent tasks/calendar, audit isolation, administrator permissions, actual Groq extraction and Deepgram microphone streaming. A successful build alone does not verify provider behavior.
+
+Never replace `TOKEN_ENCRYPTION_KEY` after storing calendar connector credentials without a re-encryption migration. Pilot setup is idempotent and preserves revoked permissions, disabled users and pending internal bookings across redeployments.
