@@ -8,5 +8,5 @@ export const metadata: Metadata = {
 };
 export const viewport: Viewport = { width: 'device-width', initialScale: 1, viewportFit: 'cover', themeColor: '#17253b' };
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="en"><body>{children}</body></html>;
+  return <html lang="en"><body><aside className="beta-disclaimer" aria-label="Beta disclaimer">Beta version, for evaluation only. Do not enter live, personal or confidential information.</aside>{children}</body></html>;
 }
