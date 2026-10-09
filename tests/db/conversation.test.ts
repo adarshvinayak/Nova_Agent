@@ -141,3 +141,58 @@ it('filters today in UAE time, includes only own assigned tasks and shared appoi
   expect((await agenda(actor,'today_appointments',now)).items.map(x=>x.title)).toEqual(['Shared today']);
  }finally{await admin.query(`UPDATE va_workers SET permissions=permissions||'{"tasks":true}'::jsonb WHERE id=$1`,[actor.id]);await admin.query('DELETE FROM va_tasks WHERE id=ANY($1::uuid[])',[taskIds.map(x=>x.id)]);await admin.query('DELETE FROM private.va_internal_events WHERE id=ANY($1::uuid[])',[events.rows.map(x=>x.id)]);}
 });
+
+it('derives a note heading and ignores a redundant model title question without losing the body',async()=>{
+ const body='Synthetic example: discuss the delivery schedule.\nKeep the order reference with it.';
+ const view=await extracted('Add a note: '+body,{...emptyFacts(),intent:'note',title:null,noteText:body,ambiguities:['Please provide a title for the note.']});
+ expect(view.state).toBe('note_ready');expect(view.facts.title).toBe('Synthetic example: discuss the delivery schedule.');
+ expect(view.turns.at(-1)?.body).toBe('Note ready. Review and confirm.');
+ await saveNote(actor,view.id,{expectedVersion:view.version,clientActionId:randomUUID()});
+ expect((await admin.query('SELECT title,body FROM va_records WHERE session_id=$1',[view.id])).rows[0]).toEqual({title:view.facts.title,body});
+});
+it('asks for actual missing note content and refuses to save a heading as the missing body',async()=>{
+ const view=await extracted('Create a note',{...emptyFacts(),intent:'note',title:'New note',noteText:null,ambiguities:['Please provide a title for the note.']});
+ expect(view.state).toBe('clarifying');expect(view.turns.at(-1)?.body).toBe('What should the note say?');
+ await expect(saveNote(actor,view.id,{expectedVersion:view.version,clientActionId:randomUUID()})).rejects.toMatchObject({code:'NOT_READY'});
+ await submitTurn(actor,view.id,{text:'Synthetic example: call the supplier.',expectedVersion:view.version,clientTurnId:randomUUID()});
+ mocks.extract.mockResolvedValue({facts:{...view.facts,noteText:'Synthetic example: call the supplier.',ambiguities:[]},usage:{requestId:randomUUID(),inputTokens:null,outputTokens:null}});
+ await processSession(actor,view.id);expect((await sessionView(actor,view.id)).state).toBe('note_ready');
+});
+it('does not repeat a resolved appointment name question or require task duration and location',async()=>{
+ const appointment=await extracted('Book inspection', {...facts,ambiguities:['Please provide an event name.']});
+ expect(appointment.state).toBe('ready');expect(appointment.proposal?.snapshot.title).toBe('Inspection');
+ const task=await extracted('Create task: call supplier',{...emptyFacts(),intent:'task',title:'Call supplier',assigneeUserCode:null,ambiguities:['Please provide a duration.','Where will it take place?']});
+ expect(task.state).toBe('task_ready');expect(task.taskDraft?.assigneeUserCode).toBe('user1');
+});
+it('returns to the existing appointment draft after answering an agenda query',async()=>{
+ const initial=await extracted('Book inspection',facts);
+ await submitTurn(actor,initial.id,{text:'Show my tasks',expectedVersion:initial.version,clientTurnId:randomUUID()});
+ mocks.extract.mockResolvedValue({facts:{...initial.facts,intent:'agenda',agendaScope:'my_tasks'},usage:{requestId:randomUUID(),inputTokens:null,outputTokens:null}});
+ await processSession(actor,initial.id);const summary=await sessionView(actor,initial.id);
+ expect(summary.agenda?.scope).toBe('my_tasks');expect(summary.facts.intent).toBe('appointment');expect(summary.facts.title).toBe('Inspection');
+ await submitTurn(actor,initial.id,{text:'Change the time to 11 am',expectedVersion:summary.version,clientTurnId:randomUUID()});
+ mocks.extract.mockResolvedValue({facts:{...summary.facts,time:'11:00'},usage:{requestId:randomUUID(),inputTokens:null,outputTokens:null}});
+ await processSession(actor,initial.id);const updated=await sessionView(actor,initial.id);
+ expect(updated.state).toBe('ready');expect(updated.facts.time).toBe('11:00');expect(updated.agenda).toBeNull();
+});
+it('preserves a draft through an agenda range question and its answer',async()=>{
+ const initial=await extracted('Book inspection',facts);
+ await submitTurn(actor,initial.id,{text:'Show my agenda',expectedVersion:initial.version,clientTurnId:randomUUID()});
+ mocks.extract.mockResolvedValue({facts:{...initial.facts,intent:'agenda',agendaScope:null},usage:{requestId:randomUUID(),inputTokens:null,outputTokens:null}});
+ await processSession(actor,initial.id);const pending=await sessionView(actor,initial.id);
+ expect(pending.turns.at(-1)?.body).toContain('today');expect(pending.agenda).toBeNull();
+ await submitTurn(actor,initial.id,{text:'My tasks',expectedVersion:pending.version,clientTurnId:randomUUID()});
+ mocks.extract.mockResolvedValue({facts:{...pending.facts,agendaScope:'my_tasks'},usage:{requestId:randomUUID(),inputTokens:null,outputTokens:null}});
+ await processSession(actor,initial.id);const resolved=await sessionView(actor,initial.id);
+ expect(resolved.agenda?.scope).toBe('my_tasks');expect(resolved.facts.intent).toBe('appointment');expect(resolved.facts.title).toBe('Inspection');
+});
+it('keeps the suspended request recoverable if an agenda lookup fails',async()=>{
+ const initial=await extracted('Book inspection',facts);
+ await submitTurn(actor,initial.id,{text:'Show my tasks',expectedVersion:initial.version,clientTurnId:randomUUID()});
+ mocks.extract.mockResolvedValue({facts:{...initial.facts,intent:'agenda',agendaScope:'my_tasks'},usage:{requestId:randomUUID(),inputTokens:null,outputTokens:null}});
+ await admin.query("UPDATE va_workers SET permissions=permissions||'{\"tasks\":false}'::jsonb WHERE id=$1",[actor.id]);
+ await processSession(actor,initial.id);expect((await sessionView(actor,initial.id)).state).toBe('failed');
+ await admin.query("UPDATE va_workers SET permissions=permissions-'tasks' WHERE id=$1",[actor.id]);
+ await processSession(actor,initial.id);const resumed=await sessionView(actor,initial.id);
+ expect(resumed.agenda?.scope).toBe('my_tasks');expect(resumed.facts.intent).toBe('appointment');expect(resumed.facts.title).toBe('Inspection');
+});

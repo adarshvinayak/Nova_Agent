@@ -153,12 +153,69 @@ describe('language providers', () => {
   });
   it.each([
     ['task with no explicit recipient field', { ...emptyFacts(), intent: 'task', title: 'Check stock' }],
-    ['agenda with no supported scope', { ...emptyFacts(), intent: 'agenda', agendaScope: null }],
     ['invented agenda scope', { ...emptyFacts(), intent: 'agenda', agendaScope: 'all_users_private_tasks' }],
     ['injected action', { ...emptyFacts(), intent: 'task', assigneeUserCode: null, execute: true }],
   ])('rejects %s at the language boundary', async (_label, facts) => {
     fetchMock.mockResolvedValueOnce(reply({ id: 'request', choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(facts) } }] }));
     await expect(new GroqLanguageProvider().extract('do it', emptyFacts(), '2026-10-08T00:00:00Z')).rejects.toMatchObject({ code: 'LANGUAGE_INVALID_FACTS' });
+  });
+  it('allows an unspecified agenda range so the application can ask one clarification', async () => {
+    const facts={...emptyFacts(),intent:'agenda',agendaScope:null};
+    fetchMock.mockResolvedValueOnce(reply({ id:'request',choices:[{finish_reason:'stop',message:{content:JSON.stringify(facts)}}] }));
+    await expect(new GroqLanguageProvider().extract('Show my agenda',emptyFacts(),'2026-10-08T00:00:00Z')).resolves.toMatchObject({facts});
+    expect((await new SimulatedLanguageProvider().extract('Show my agenda',emptyFacts(),'2026-10-08T00:00:00Z')).facts).toMatchObject({intent:'agenda',agendaScope:null});
+  });
+  it.each([
+    ['today','today'],['next','next'],['appointments','appointments'],['my tasks','my_tasks'],['tasks today','today_tasks'],["Today's appointments",'today_appointments'],
+  ])('answers an agenda range question with %s without turning the answer into a scheduling change', async (answer,scope) => {
+    const provider=new SimulatedLanguageProvider();
+    const first=await provider.extract('Show my agenda',emptyFacts(),'2026-10-08T00:00:00Z');
+    const next=await provider.extract(answer,first.facts,'2026-10-08T00:00:00Z');
+    expect(next.facts).toMatchObject({intent:'agenda',agendaScope:scope,date:null,time:null,title:null});
+  });
+  it('does not treat an optional note heading correction as missing note body content', async () => {
+    const provider=new SimulatedLanguageProvider();
+    const first=await provider.extract('Add a note',emptyFacts(),'2026-10-08T00:00:00Z');
+    const heading=await provider.extract('Change the title to Supplier reminder',first.facts,'2026-10-08T00:00:00Z');
+    expect(heading.facts).toMatchObject({intent:'note',title:'Supplier reminder',noteText:null});
+    const body=await provider.extract('Call the supplier about the inspection',heading.facts,'2026-10-08T00:00:00Z');
+    expect(body.facts).toMatchObject({intent:'note',title:'Supplier reminder',noteText:'Call the supplier about the inspection'});
+  });
+  it.each(['Add a note','Create a note.','Save a note','Note:'])('collects a missing note body after %s without asking for a title or scheduling fields', async request => {
+    const provider=new SimulatedLanguageProvider();
+    const first=await provider.extract(request,emptyFacts(),'2026-10-08T00:00:00Z');
+    expect(first.facts).toMatchObject({intent:'note',noteText:null,title:null,date:null,time:null});
+    const body='Call the supplier about the inspection tomorrow at 10:00. Keep all invoice references.';
+    const second=await provider.extract(body,first.facts,'2026-10-08T00:00:00Z');
+    expect(second.facts).toMatchObject({intent:'note',noteText:body,title:body,date:null,time:null,durationMinutes:null});
+  });
+  it.each(['Add a note: Check the meeting minutes','Create a note Check the meeting minutes'])('extracts note content directly from %s', async request => {
+    expect((await new SimulatedLanguageProvider().extract(request,emptyFacts(),'2026-10-08T00:00:00Z')).facts).toMatchObject({intent:'note',noteText:'Check the meeting minutes',title:'Check the meeting minutes'});
+  });
+  it.each(['Create a task','Add a task.'])('collects plain task content after %s and defaults to self without a deadline', async request => {
+    const provider=new SimulatedLanguageProvider();
+    const first=await provider.extract(request,emptyFacts(),'2026-10-08T00:00:00Z');
+    expect(first.facts).toMatchObject({intent:'task',title:null,assigneeUserCode:null,date:null,time:null});
+    const second=await provider.extract('Prepare the inspection meeting checklist',first.facts,'2026-10-08T00:00:00Z');
+    expect(second.facts).toMatchObject({intent:'task',title:'Prepare the inspection meeting checklist',assigneeUserCode:null,date:null,time:null});
+  });
+  it.each(['note','task'] as const)('keeps incidental appointment words in a %s draft and resets incompatible facts for an explicit appointment', async intent => {
+    const provider=new SimulatedLanguageProvider();
+    const previous={...emptyFacts(),intent,title:'Supplier report',noteText:intent==='note'?'Supplier report':null,date:'2026-11-10',time:'15:00',durationMinutes:60,location:'Old office',assigneeUserCode:'user2'};
+    const incidental=await provider.extract('The inspection meeting needs a checklist',previous,'2026-10-08T00:00:00Z');
+    expect(incidental.facts.intent).toBe(intent);
+    expect(incidental.facts.title).toBe('Supplier report');
+    const switched=await provider.extract('Book client meeting tomorrow at 10:00',previous,'2026-10-08T00:00:00Z');
+    expect(switched.facts).toMatchObject({intent:'appointment',title:'client meeting',date:'2026-10-09',time:'10:00',durationMinutes:null,location:null,noteText:null,assigneeUserCode:null});
+  });
+  it('instructs the model to generate note headings and avoid optional-field clarification loops', async () => {
+    fetchMock.mockResolvedValueOnce(reply({id:'request',choices:[{finish_reason:'stop',message:{content:JSON.stringify({...emptyFacts(),intent:'note',noteText:'Call the supplier',title:null})}}]}));
+    await new GroqLanguageProvider().extract('Note: Call the supplier',emptyFacts(),'2026-10-08T00:00:00Z');
+    const prompt=JSON.parse(fetchMock.mock.calls[0][1].body).messages[0].content;
+    expect(prompt).toContain('a note title is never mandatory');
+    expect(prompt).toContain('Notes never require date, time, duration or location');
+    expect(prompt).toContain('Task due date/time and recipient are optional');
+    expect(prompt).toContain('answered with plain content in the next turn');
   });
   it('preserves a complete long note and replaces the canonical body on correction', async () => {
     const provider = new SimulatedLanguageProvider();

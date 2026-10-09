@@ -63,7 +63,7 @@ export async function submitTurn(actor:Actor,id:string,input:{text:string;source
     const session=await ownedSession(db,actor,id,true);requireEditable(session,input.expectedVersion);
     await db.query("UPDATE public.va_proposals SET status='superseded' WHERE session_id=$1 AND status='ready'",[id]);
     await appendTurn(db,actor,id,'user',input.text,input.clientTurnId,input.source??'typed');
-    await db.query("UPDATE public.va_sessions SET state='captured',version=version+1,assistant_view=NULL,processing_token=NULL,processing_until=NULL,updated_at=now() WHERE id=$1",[id]);
+    await db.query("UPDATE public.va_sessions SET state='captured',version=version+1,assistant_view=CASE WHEN jsonb_typeof(assistant_view->'suspendedDraft')='object' THEN jsonb_build_object('suspendedDraft',assistant_view->'suspendedDraft') ELSE NULL END,processing_token=NULL,processing_until=NULL,updated_at=now() WHERE id=$1",[id]);
     await finishKey(db,actor,'turn',input.clientTurnId,id);
     return {id,process:true};
   });
@@ -77,7 +77,9 @@ export async function editFacts(actor:Actor,id:string,input:{facts:Partial<Facts
     await touchAction(db,actor,id);
     const session=await ownedSession(db,actor,id,true);requireEditable(session,input.expectedVersion);
     await db.query("UPDATE public.va_proposals SET status='superseded' WHERE session_id=$1 AND status='ready'",[id]);
-    const facts={...emptyFacts(),...session.facts,...input.facts,timeZone:'Asia/Dubai',ambiguities:[]};
+    const base=session.assistant_view?.suspendedDraft??session.facts;
+    const facts={...emptyFacts(),...base,...input.facts,timeZone:'Asia/Dubai',ambiguities:[]};
+    if(session.assistant_view?.suspendedDraft&&facts.intent==='agenda')facts.intent=base.intent;
     if(facts.locationNotApplicable) facts.location=null;
     await appendTurn(db,actor,id,'user','Updated the request details.',input.clientActionId,'typed');
     await db.query("UPDATE public.va_sessions SET facts=$2,state='captured',version=version+1,assistant_view=NULL,processing_token=NULL,processing_until=NULL,updated_at=now() WHERE id=$1",[id,JSON.stringify(facts)]);
@@ -93,6 +95,7 @@ export async function saveNote(actor:Actor,id:string,input:{expectedVersion:numb
     if(old) return {id};
     await touchAction(db,actor,id);
     const session=await ownedSession(db,actor,id,true);requireEditable(session,input.expectedVersion);
+    if(session.facts.intent==='note'&&session.state!=='note_ready')throw new AppError('NOT_READY','Add the note text and resolve its questions before confirming.',409);
     const {rows}=await db.query("SELECT body FROM public.va_turns WHERE session_id=$1 AND speaker='user' ORDER BY turn_no",[id]);
     const body=session.facts.intent==='note'&&(session.facts.noteText||session.facts.title)?(session.facts.noteText||session.facts.title):rows.map(r=>r.body).filter(Boolean).join('\n');
     await db.query(`INSERT INTO public.va_records(workspace_id,worker_id,session_id,kind,title,body,outcome)

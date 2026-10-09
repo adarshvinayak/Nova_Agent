@@ -10,6 +10,7 @@ import { hash } from './crypto';
 import { agenda,agendaReply,taskDraft } from './agenda';
 import { requireModule } from './workspace-modules';
 import { AppError,ProviderError } from './errors';
+import { normalizeAssistantFacts } from './assistant-facts';
 import { classifyConversationControl } from './conversation-control';
 import { assertActionActive,finishAction,refreshActionQuota } from './action-quota';
 
@@ -38,7 +39,7 @@ export async function processSession(actor:Actor,id:string,extract=true) {
      (SELECT user_code FROM public.va_workers WHERE id=$3) AS self_code
      FROM public.va_turns WHERE session_id=$1 AND speaker='user' ORDER BY turn_no DESC LIMIT 1`,[id,actor.workspaceId,actor.id]);
    await db.query("UPDATE public.va_sessions SET processing_token=$2,processing_until=now()+interval '45 seconds' WHERE id=$1",[id,token]);
-   return {facts:s.facts as Facts,version:s.version as number,text:turns.rows[0]?.body??'',createdAt:(turns.rows[0]?.created_at??s.created_at).toISOString(),context:{turns:turns.rows[0]?.history??[],users:turns.rows[0]?.users??[],selfUserCode:turns.rows[0]?.self_code??null} as AssistantContext};
+   return {facts:s.facts as Facts,version:s.version as number,text:turns.rows[0]?.body??'',createdAt:(turns.rows[0]?.created_at??s.created_at).toISOString(),suspendedDraft:s.assistant_view?.suspendedDraft as Facts|null|undefined,context:{turns:turns.rows[0]?.history??[],users:turns.rows[0]?.users??[],selfUserCode:turns.rows[0]?.self_code??null} as AssistantContext};
  });
  if(!claimed) return;
  let facts=claimed.facts;
@@ -50,9 +51,10 @@ export async function processSession(actor:Actor,id:string,extract=true) {
      await pool().query(`INSERT INTO public.va_usage_events(workspace_id,worker_id,session_id,provider,provider_request_id,operation,input_tokens,output_tokens,cost_status,estimated_cost_aed)
        VALUES($1,$2,$3,$4,$5,'extract',$6,$7,$8,$9) ON CONFLICT DO NOTHING`,[actor.workspaceId,actor.id,id,config().mode==='demo'&&process.env.LANGUAGE_PROVIDER!=='groq'?'simulated':'groq',result.usage.requestId,result.usage.inputTokens,result.usage.outputTokens,config().mode==='demo'&&process.env.LANGUAGE_PROVIDER!=='groq'?'not_applicable':'unknown',config().mode==='demo'&&process.env.LANGUAGE_PROVIDER!=='groq'?0:null]);
    }
-   facts={...facts,timeZone:'Asia/Dubai'};
+   facts=normalizeAssistantFacts({...facts,timeZone:'Asia/Dubai'});
    const offScope=['unsupported','unclear'].includes(facts.intent);
    let reply:string|null=null,ready:EventSnapshot|null=null,summary:AgendaSummary|null=null,draft:TaskDraft|null=null;
+   let suspendedDraft:Facts|null=null;
    let state:SessionState='clarifying';
    let connection:Awaited<ReturnType<typeof connectionFor>>|null=null;
    if(facts.intent==='cancel'){
@@ -64,11 +66,15 @@ export async function processSession(actor:Actor,id:string,extract=true) {
    }else if(offScope){
      reply=facts.intent==='unsupported'?( /\b(?:cancel|delete|reschedule)\b.*\b(?:saved|booked|existing|yesterday)\b/i.test(claimed.text)?'I can discard this draft, but I can’t change or cancel saved appointments.':'I can help with appointments, notes, tasks, and your agenda. That action isn’t available.'):(facts.ambiguities[0]??'I can help with appointments, notes, tasks, or your agenda. What would you like?');
      // An unrelated question must not erase an unconfirmed draft or trigger a write.
-     facts=claimed.facts;
+     facts=claimed.facts;suspendedDraft=claimed.suspendedDraft??null;
    }else if(facts.intent==='agenda'){
+     suspendedDraft=['appointment','note','task'].includes(claimed.facts.intent)?claimed.facts:claimed.suspendedDraft??null;
      if(facts.ambiguities.length)reply=facts.ambiguities[0];
      else if(!facts.agendaScope)reply='Would you like what’s next, today’s agenda, or your tasks?';
-     else {summary=await agenda(actor,facts.agendaScope);reply=agendaReply(summary);}
+     else {summary=await agenda(actor,facts.agendaScope);reply=agendaReply(summary);
+       // Viewing an agenda must not replace the unfinished request being discussed.
+       if(suspendedDraft)facts={...suspendedDraft};suspendedDraft=null;
+     }
    }else if(facts.intent==='task'){
      const result=await taskDraft(actor,facts);draft=result.draft;reply=result.question;
      if(draft){state='task_ready';reply=`Task ready for ${draft.assigneeUserCode}. Review and confirm.`;facts.assigneeUserCode=draft.assigneeUserCode;}
@@ -107,7 +113,7 @@ export async function processSession(actor:Actor,id:string,extract=true) {
      }
      await appendTurn(db,actor,id,'assistant',reply??'Add a little more detail to continue.');
      await db.query(`WITH updated AS (UPDATE public.va_sessions SET facts=$2,state=$3,version=$4,assistant_view=$8,processing_token=NULL,processing_until=NULL,updated_at=now() WHERE id=$1 RETURNING id)
-       INSERT INTO private.va_operation_events(workspace_id,actor_worker_id,subject_id,event_type,detail) SELECT $5,$6,id,'conversation.processed',$7::jsonb FROM updated`,[id,JSON.stringify(facts),state,nextVersion,actor.workspaceId,actor.id,{userCode:actor.userCode??'worker',alias:actor.displayName,sessionId:id,status:state,processingMsBeforeCommit:Math.round(performance.now()-processingStarted)},{agenda:summary,taskDraft:draft}]);
+       INSERT INTO private.va_operation_events(workspace_id,actor_worker_id,subject_id,event_type,detail) SELECT $5,$6,id,'conversation.processed',$7::jsonb FROM updated`,[id,JSON.stringify(facts),state,nextVersion,actor.workspaceId,actor.id,{userCode:actor.userCode??'worker',alias:actor.displayName,sessionId:id,status:state,processingMsBeforeCommit:Math.round(performance.now()-processingStarted)},{agenda:summary,taskDraft:draft,suspendedDraft}]);
      if(state==='cancelled')await finishAction(db,actor,id,'cancelled');
    });
  } catch(error) {
@@ -116,10 +122,11 @@ export async function processSession(actor:Actor,id:string,extract=true) {
    await actorTransaction(actor,async db=>{
      await assertActionActive(db,actor,id);
      const s=await ownedSession(db,actor,id,true);if(s.processing_token!==token||s.version!==claimed.version) return;
+     const retainedDraft=facts.intent==='agenda'?(claimed.suspendedDraft??(['appointment','note','task'].includes(claimed.facts.intent)?claimed.facts:null)):null;
      const message=error instanceof AppError&&error.status===403?error.message:error instanceof ProviderError&&error.code.startsWith('CALENDAR')?'Calendar access or availability could not be verified. Your request is saved. Retry, edit the details, or save it as a note.':'The assistant could not finish this request. Your words are saved. Retry or enter the details using Edit.';
      await appendTurn(db,actor,id,'assistant',message);
-     await db.query(`WITH updated AS (UPDATE public.va_sessions SET facts=$2,state='failed',version=version+1,assistant_view=NULL,processing_token=NULL,processing_until=NULL,updated_at=now() WHERE id=$1 RETURNING id)
-     INSERT INTO private.va_operation_events(workspace_id,actor_worker_id,subject_id,event_type,detail) SELECT $3,$4,id,'conversation.processing_failed',$5::jsonb FROM updated`,[id,JSON.stringify(facts),actor.workspaceId,actor.id,{userCode:actor.userCode??'worker',alias:actor.displayName,sessionId:id,errorCode:error instanceof ProviderError||error instanceof AppError?error.code:'PROCESSING_FAILED',processingMsBeforeCommit:Math.round(performance.now()-processingStarted)}]);
+     await db.query(`WITH updated AS (UPDATE public.va_sessions SET facts=$2,state='failed',version=version+1,assistant_view=$6,processing_token=NULL,processing_until=NULL,updated_at=now() WHERE id=$1 RETURNING id)
+     INSERT INTO private.va_operation_events(workspace_id,actor_worker_id,subject_id,event_type,detail) SELECT $3,$4,id,'conversation.processing_failed',$5::jsonb FROM updated`,[id,JSON.stringify(facts),actor.workspaceId,actor.id,{userCode:actor.userCode??'worker',alias:actor.displayName,sessionId:id,errorCode:error instanceof ProviderError||error instanceof AppError?error.code:'PROCESSING_FAILED',processingMsBeforeCommit:Math.round(performance.now()-processingStarted)},retainedDraft?{suspendedDraft:retainedDraft}:null]);
    });
  }
 }

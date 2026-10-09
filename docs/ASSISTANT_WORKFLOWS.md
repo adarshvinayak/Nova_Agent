@@ -44,3 +44,9 @@ HQ refreshes user counts every three seconds and on focus. It displays completed
 Quota start, completion, timeout, cancellation and reset are audited. Three minutes refers to inactivity since the last accepted user interaction, rather than the total duration of an active conversation. Expiry is applied on the next quota check or interaction, including HQ polling; there is no background scheduler required. Migration 009 creates the quota ledger and binds speech authorizations to conversations. No new environment variables are required.
 
 Clear commands such as “cancel it,” “never mind” and “stop this request” are handled before the language model, including during follow-ups. Cancellation words inside note text remain content. Mixed cancellation/new requests require clarification. Saved calendar changes and deletions remain unsupported.
+
+## Clarification corrections
+
+Notes require content, not a separate heading. A missing heading is derived from the note text, and simple model questions asking for an optional note title or already-provided appointment fields are discarded. Genuine choices, invalid values and unresolved recipients still require clarification. Empty notes cannot be confirmed as headings alone. Task duration and location are not required.
+
+Plain replies can fill an empty note or task. Incidental words such as “inspection” inside a task do not change its intent. Explicit switches to a new appointment clear incompatible old note/task details. Agenda range answers resolve the range, while an interrupted draft survives the query and a failed agenda lookup for subsequent corrections.

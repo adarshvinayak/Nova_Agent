@@ -1,5 +1,5 @@
 import {type Page} from '@playwright/test';
-import {test,expect} from './fixtures';
+import {test,expect,adminCode} from './fixtures';
 async function signIn(page:Page,userCode='user1'){await page.goto('/');await page.getByRole('combobox',{name:'User code',exact:true}).selectOption(userCode);await page.getByLabel('Your name',{exact:true}).fill('Conversation tester');await page.getByRole('button',{name:'Open workspace',exact:true}).click();await expect(page.getByRole('button',{name:'Tap to speak',exact:true})).toBeVisible();}
 async function streaming(page:Page,transcript:string){
  await page.route('**/api/speech/token',route=>route.fulfill({json:{speechSessionId:'30000000-0000-4000-8000-000000000001',accessToken:'temporary-test-token',webSocketUrl:'wss://api.deepgram.com/v1/listen'}}));
@@ -85,4 +85,16 @@ test('task assignment can be corrected before confirmation and personal tasks ar
  await expect(page.locator('.agenda-chat')).toContainText(title);
  await page.getByRole('button',{name:'Dashboard',exact:true}).click();await page.getByRole('combobox',{name:'Dashboard section'}).selectOption('assigned');
  await expect(page.getByRole('heading',{name:'Assigned tasks',exact:true})).toBeVisible();await expect(page.getByText(title,{exact:true})).toBeVisible();
+});
+
+test('a note needs only content and plain task followups retain their intent',async({page})=>{
+ await page.setViewportSize({width:390,height:844});await page.goto('/');await page.getByRole('button',{name:'Admin',exact:true}).click();await page.getByLabel('Your name',{exact:true}).fill('Conversation regression tester');await page.getByLabel('Admin code',{exact:true}).fill(adminCode());await page.getByRole('button',{name:'Open workspace',exact:true}).click();await page.getByRole('button',{name:'Tap to speak',exact:true}).waitFor();
+ await page.getByRole('button',{name:'Switch to keyboard input',exact:true}).click();
+ const input=page.getByLabel('Prefer to type? Send a message'),send=page.getByRole('button',{name:'Send message',exact:true}),log=page.getByRole('log',{name:'Conversation'});
+ await input.fill('Create a note');await send.click();await expect(log).toContainText('What should the note say?');
+ await input.fill('Synthetic example: follow up about the inspection.');await send.click();await expect(page.getByRole('button',{name:'Confirm note',exact:true})).toBeEnabled();
+ await expect(log).not.toContainText('provide a title');await page.getByRole('button',{name:'Confirm note',exact:true}).click();await expect(page.getByRole('heading',{name:'Note saved',exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Start a new request',exact:true}).click();await page.getByRole('button',{name:'Start new chat',exact:true}).click();await page.getByRole('button',{name:'Switch to keyboard input',exact:true}).click();
+ await input.fill('Create task');await send.click();await expect(log).toContainText('What needs to be done?');
+ await input.fill('Review the inspection checklist');await send.click();await expect(page.getByRole('button',{name:'Confirm task',exact:true})).toBeEnabled();await expect(log).toContainText('Task ready for admin');
 });
